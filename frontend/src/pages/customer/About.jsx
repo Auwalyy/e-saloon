@@ -38,7 +38,6 @@ const About = () => (
           </div>
         </motion.div>
       </div>
-
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
         {[
           { title: 'Our Mission', desc: 'To provide exceptional beauty services that enhance confidence and celebrate individuality.' },
