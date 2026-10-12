@@ -1,13 +1,20 @@
+/**
+ * Nodemailer transport.
+ * When SMTP credentials are not configured (local development) emails are
+ * rendered to the console instead of being sent, so the app works out of the box.
+ */
 const nodemailer = require('nodemailer');
+const env = require('./env');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.EMAIL_HOST,
-  port: process.env.EMAIL_PORT,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+const isConfigured = Boolean(env.email.host && env.email.user && env.email.pass);
 
-module.exports = transporter;
+const transporter = isConfigured
+  ? nodemailer.createTransport({
+      host: env.email.host,
+      port: env.email.port,
+      secure: env.email.port === 465,
+      auth: { user: env.email.user, pass: env.email.pass },
+    })
+  : nodemailer.createTransport({ jsonTransport: true });
+
+module.exports = { transporter, isConfigured };

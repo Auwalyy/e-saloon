@@ -1,9 +1,17 @@
-const router = require('express').Router();
-const ctrl = require('../controllers/report.controller');
-const { protect, authorize } = require('../middleware/auth.middleware');
+/**
+ * Report routes (admin only): on-screen report plus PDF / Excel export.
+ */
+const express = require('express');
+const controller = require('../controllers/report.controller');
+const rules = require('../validators/catalog.validator');
+const validate = require('../middleware/validate.middleware');
+const { adminOnly } = require('../middleware/auth.middleware');
 
-router.get('/', protect, authorize('admin'), ctrl.getReport);
-router.get('/export/pdf', protect, authorize('admin'), ctrl.exportPDF);
-router.get('/export/excel', protect, authorize('admin'), ctrl.exportExcel);
+const router = express.Router();
+
+router.use(adminOnly);
+router.get('/', validate(rules.report), controller.getReport);
+router.get('/export/pdf', validate(rules.report), controller.exportPdf);
+router.get('/export/excel', validate(rules.report), controller.exportExcel);
 
 module.exports = router;

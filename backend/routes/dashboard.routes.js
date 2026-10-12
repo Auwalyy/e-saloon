@@ -1,8 +1,12 @@
-const router = require('express').Router();
-const ctrl = require('../controllers/dashboard.controller');
-const { protect, authorize } = require('../middleware/auth.middleware');
+/**
+ * Dashboard analytics (admin only).
+ */
+const express = require('express');
+const controller = require('../controllers/dashboard.controller');
+const { adminOnly } = require('../middleware/auth.middleware');
 
-router.get('/', protect, authorize('admin'), ctrl.getDashboardStats);
-router.get('/activity', protect, authorize('admin'), ctrl.getRecentActivity);
+const router = express.Router();
+
+router.get('/', adminOnly, controller.getDashboard);
 
 module.exports = router;

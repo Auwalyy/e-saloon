@@ -1,12 +1,18 @@
-const router = require('express').Router();
-const ctrl = require('../controllers/review.controller');
-const { protect, authorize } = require('../middleware/auth.middleware');
+/**
+ * Review routes: public list, customer submission, admin moderation.
+ */
+const express = require('express');
+const controller = require('../controllers/review.controller');
+const rules = require('../validators/catalog.validator');
+const { idParam, pagination } = require('../validators/common.validator');
 const validate = require('../middleware/validate.middleware');
-const { reviewValidator } = require('../validators/service.validator');
+const { protect, optionalAuth, authorize } = require('../middleware/auth.middleware');
 
-router.get('/', ctrl.getReviews);
-router.post('/', protect, reviewValidator, validate, ctrl.createReview);
-router.patch('/:id/approve', protect, authorize('admin'), ctrl.approveReview);
-router.delete('/:id', protect, authorize('admin'), ctrl.deleteReview);
+const router = express.Router();
+
+router.get('/', optionalAuth, validate(pagination), controller.getReviews);
+router.post('/', protect, authorize('customer'), validate(rules.createReview), controller.createReview);
+router.put('/:id', protect, authorize('admin'), validate([...idParam, ...rules.updateReview]), controller.updateReview);
+router.delete('/:id', protect, validate(idParam), controller.deleteReview);
 
 module.exports = router;

@@ -1,47 +1,42 @@
 import { HiChevronLeft, HiChevronRight } from 'react-icons/hi';
 
-const Pagination = ({ page, pages, total, limit, onPageChange }) => {
-  if (pages <= 1) return null;
+/**
+ * Pager driven by the `pagination` object returned by the API
+ * (`{ page, pages, total, limit }`).
+ */
+const Pagination = ({ pagination, onPageChange }) => {
+  if (!pagination || pagination.pages <= 1) return null;
+  const { page, pages, total, limit } = pagination;
   const start = (page - 1) * limit + 1;
   const end = Math.min(page * limit, total);
 
+  // Up to five page numbers centred on the current page.
+  const first = Math.max(1, Math.min(page - 2, pages - 4));
+  const numbers = Array.from({ length: Math.min(5, pages) }, (_, index) => first + index);
+
   return (
-    <div className="flex items-center justify-between mt-4 px-2">
-      <p className="text-sm text-gray-500">Showing {start}–{end} of {total}</p>
-      <div className="flex items-center gap-1">
-        <button
-          onClick={() => onPageChange(page - 1)}
-          disabled={page === 1}
-          className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
+    <div className="flex flex-col sm:flex-row items-center justify-between gap-3 mt-4 px-1">
+      <p className="text-sm text-gray-500">Showing {start}-{end} of {total}</p>
+      <nav className="flex items-center gap-1" aria-label="Pagination">
+        <button onClick={() => onPageChange(page - 1)} disabled={page === 1} className="icon-btn" aria-label="Previous page">
           <HiChevronLeft className="w-4 h-4" />
         </button>
-        {Array.from({ length: Math.min(5, pages) }, (_, i) => {
-          let p;
-          if (pages <= 5) p = i + 1;
-          else if (page <= 3) p = i + 1;
-          else if (page >= pages - 2) p = pages - 4 + i;
-          else p = page - 2 + i;
-          return (
-            <button
-              key={p}
-              onClick={() => onPageChange(p)}
-              className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
-                p === page ? 'bg-gold-500 text-white' : 'hover:bg-gray-100 text-gray-600'
-              }`}
-            >
-              {p}
-            </button>
-          );
-        })}
-        <button
-          onClick={() => onPageChange(page + 1)}
-          disabled={page === pages}
-          className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-        >
+        {numbers.map((number) => (
+          <button
+            key={number}
+            onClick={() => onPageChange(number)}
+            aria-current={number === page ? 'page' : undefined}
+            className={`w-8 h-8 rounded-lg text-sm font-medium transition-colors ${
+              number === page ? 'bg-gold-500 text-salon-dark' : 'hover:bg-gray-100 text-gray-600'
+            }`}
+          >
+            {number}
+          </button>
+        ))}
+        <button onClick={() => onPageChange(page + 1)} disabled={page === pages} className="icon-btn" aria-label="Next page">
           <HiChevronRight className="w-4 h-4" />
         </button>
-      </div>
+      </nav>
     </div>
   );
 };

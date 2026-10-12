@@ -1,183 +1,184 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { HiCalendar, HiDownload, HiStar, HiX, HiRefresh } from 'react-icons/hi';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import toast from 'react-hot-toast';
-import { appointmentService, paymentService, reviewService } from '../../services/index';
-import { formatDate, formatTime, formatCurrency, getStatusColor, downloadBlob } from '../../utils/helpers';
-import { TableSkeleton } from '../../components/ui/Skeleton';
-import Modal from '../../components/ui/Modal';
+import { HiOutlineCalendar, HiOutlineClock, HiOutlineUser } from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import useDocuments from '../../hooks/useDocuments';
+import { appointmentService, paymentService } from '../../services';
+import { getErrorMessage } from '../../services/api';
+import { formatCurrency, formatDate, formatTime, getStatusColor, humanize, PAYMENT_METHODS } from '../../utils/helpers';
+import PageHero from '../../components/common/PageHero';
+import RescheduleModal from '../../components/common/RescheduleModal';
+import ReviewModal from '../../components/common/ReviewModal';
+import SmartImage from '../../components/ui/SmartImage';
 import Button from '../../components/ui/Button';
-import StarRating from '../../components/ui/StarRating';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import Textarea from '../../components/ui/Textarea';
 import Pagination from '../../components/ui/Pagination';
+import EmptyState from '../../components/ui/EmptyState';
+import { Skeleton } from '../../components/ui/Skeleton';
+import { Reveal } from '../../components/ui/Motion';
 
+const TABS = [
+  { value: 'upcoming', label: 'Upcoming' },
+  { value: 'past', label: 'Past & Cancelled' },
+];
+
+/** The customer's appointments, with reschedule, cancel, pay, receipt and review actions. */
 const MyBookings = () => {
-  const [appointments, setAppointments] = useState([]);
-  const [pagination, setPagination] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [scope, setScope] = useState('upcoming');
   const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [reviewModal, setReviewModal] = useState(null);
-  const [cancelModal, setCancelModal] = useState(null);
-  const [rating, setRating] = useState(5);
-  const [comment, setComment] = useState('');
-  const [submitting, setSubmitting] = useState(false);
+  const [rescheduling, setRescheduling] = useState(null);
+  const [reviewing, setReviewing] = useState(null);
+  const [cancelling, setCancelling] = useState(null);
+  const [cancelReason, setCancelReason] = useState('');
+  const [working, setWorking] = useState(false);
+  const documents = useDocuments();
 
-  const load = () => {
-    setLoading(true);
-    appointmentService.getAll({ page, limit: 10, status: statusFilter })
-      .then(({ data }) => { setAppointments(data.data || []); setPagination(data.pagination || {}); })
-      .finally(() => setLoading(false));
+  const { data, loading, refetch } = useFetch(() => appointmentService.getAll({ scope, page, limit: 6 }), [scope, page]);
+  const config = useFetch(() => paymentService.getConfig());
+  const onlineEnabled = Boolean(config.data?.data?.onlineEnabled);
+  const appointments = data?.data || [];
+
+  const switchTab = (value) => {
+    setScope(value);
+    setPage(1);
   };
 
-  useEffect(() => { load(); }, [page, statusFilter]);
-
-  const handleCancel = async () => {
-    setSubmitting(true);
+  const confirmCancel = async () => {
+    setWorking(true);
     try {
-      await appointmentService.update(cancelModal.id, { status: 'cancelled', cancellation_reason: 'Cancelled by customer' });
+      await appointmentService.cancel(cancelling.id, cancelReason);
       toast.success('Appointment cancelled');
-      setCancelModal(null);
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to cancel');
+      setCancelling(null);
+      setCancelReason('');
+      refetch();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to cancel this appointment'));
     } finally {
-      setSubmitting(false);
+      setWorking(false);
     }
   };
 
-  const handleReview = async () => {
-    setSubmitting(true);
+  const payOnline = async (appointment) => {
     try {
-      await reviewService.create({ appointment_id: reviewModal.id, rating, comment });
-      toast.success('Review submitted! Thank you 🌟');
-      setReviewModal(null);
-      setRating(5); setComment('');
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to submit review');
-    } finally {
-      setSubmitting(false);
+      const { data: checkout } = await paymentService.initialize(appointment.id);
+      window.location.assign(checkout.authorizationUrl);
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to start the payment'));
     }
   };
-
-  const handleDownloadReceipt = async (paymentId) => {
-    try {
-      const { data } = await paymentService.downloadReceipt(paymentId);
-      downloadBlob(data, `receipt-${paymentId}.pdf`);
-    } catch {
-      toast.error('Receipt not available');
-    }
-  };
-
-  const statuses = ['', 'pending', 'confirmed', 'completed', 'cancelled'];
 
   return (
-    <div className="min-h-screen bg-salon-bg py-12">
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-serif font-bold text-gray-900">My Bookings</h1>
-            <p className="text-gray-500 text-sm mt-1">View and manage your appointments</p>
-          </div>
-          <div className="flex gap-2">
-            {statuses.map(s => (
-              <button key={s} onClick={() => { setStatusFilter(s); setPage(1); }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-medium capitalize transition-colors ${statusFilter === s ? 'bg-gold-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50 border border-gray-200'}`}>
-                {s || 'All'}
+    <>
+      <PageHero eyebrow="Your account" title="My Bookings" subtitle="Manage upcoming visits and look back at past ones." />
+
+      <section className="container-page py-10 max-w-4xl">
+        <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+          <div className="flex gap-2" role="tablist">
+            {TABS.map((tab) => (
+              <button key={tab.value} type="button" role="tab" aria-selected={scope === tab.value} onClick={() => switchTab(tab.value)} className={`tab ${scope === tab.value ? 'tab-active' : 'bg-white shadow-sm'}`}>
+                {tab.label}
               </button>
             ))}
           </div>
+          <Link to="/book" className="btn-primary !py-2 !px-4 !text-sm">New Booking</Link>
         </div>
 
-        {loading ? <TableSkeleton rows={5} cols={6} /> : (
-          <>
-            {appointments.length === 0 ? (
-              <div className="card text-center py-16">
-                <HiCalendar className="w-12 h-12 text-gray-300 mx-auto mb-4" />
-                <h3 className="font-medium text-gray-500">No appointments found</h3>
-                <p className="text-gray-400 text-sm mt-1">Book your first appointment today!</p>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {appointments.map((appt, i) => (
-                  <motion.div key={appt.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-                    className="card hover:shadow-card-hover transition-shadow"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                      <div className="flex items-start gap-4">
-                        <div className="w-12 h-12 bg-gold-100 rounded-xl flex items-center justify-center shrink-0">
-                          <HiCalendar className="w-6 h-6 text-gold-600" />
-                        </div>
+        {loading ? (
+          <div className="space-y-4">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-40" />)}</div>
+        ) : appointments.length === 0 ? (
+          <div className="card">
+            <EmptyState
+              icon={HiOutlineCalendar}
+              title={scope === 'upcoming' ? 'No upcoming appointments' : 'No past appointments yet'}
+              message={scope === 'upcoming' ? 'Ready for a fresh look? Book your next visit now.' : 'Your completed and cancelled visits will appear here.'}
+              action={scope === 'upcoming' && <Link to="/book" className="btn-primary">Book an Appointment</Link>}
+            />
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {appointments.map((appointment, index) => {
+              const { payment } = appointment;
+              const isActive = ['pending', 'confirmed'].includes(appointment.status);
+              const isPaid = payment?.status === 'success';
+              return (
+                <Reveal key={appointment.id} delay={index * 0.04}>
+                  <article className="card !p-0 overflow-hidden flex flex-col sm:flex-row">
+                    <SmartImage src={appointment.service?.image} alt="" className="h-36 sm:h-auto sm:w-44 shrink-0" />
+                    <div className="p-5 flex-1 min-w-0">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
                         <div>
-                          <h3 className="font-semibold text-gray-900">{appt.service_name}</h3>
-                          <p className="text-sm text-gray-500">with {appt.stylist_name || 'TBD'}</p>
-                          <p className="text-sm text-gray-400 mt-1">
-                            {formatDate(appt.appointment_date)} at {formatTime(appt.start_time)}
-                          </p>
-                          <p className="text-gold-600 font-semibold text-sm mt-1">{formatCurrency(appt.total_amount)}</p>
+                          <h2 className="text-lg font-semibold text-gray-900 font-sans">{appointment.service?.name}</h2>
+                          <p className="text-xs text-gray-400">{appointment.reference}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className={getStatusColor(appointment.status)}>{humanize(appointment.status)}</span>
+                          <span className={getStatusColor(appointment.paymentStatus)}>{humanize(appointment.paymentStatus)}</span>
                         </div>
                       </div>
-                      <div className="flex flex-col items-end gap-2">
-                        <span className={getStatusColor(appt.status)}>{appt.status}</span>
-                        <span className={getStatusColor(appt.payment_status)}>{appt.payment_status}</span>
-                        <div className="flex gap-2 flex-wrap justify-end">
-                          {appt.status === 'completed' && (
+
+                      <div className="grid sm:grid-cols-3 gap-2 mt-4 text-sm text-gray-600">
+                        <p className="flex items-center gap-2"><HiOutlineCalendar className="w-4 h-4 text-gold-600" />{formatDate(appointment.date, 'EEE, d MMM yyyy')}</p>
+                        <p className="flex items-center gap-2"><HiOutlineClock className="w-4 h-4 text-gold-600" />{formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}</p>
+                        <p className="flex items-center gap-2"><HiOutlineUser className="w-4 h-4 text-gold-600" />{appointment.employee?.name}</p>
+                      </div>
+
+                      {appointment.cancelReason && (
+                        <p className="text-sm text-gray-500 mt-3"><span className="font-medium">Reason:</span> {appointment.cancelReason}</p>
+                      )}
+
+                      <div className="flex items-center justify-between gap-3 mt-4 pt-4 border-t border-gray-100 flex-wrap">
+                        <p className="text-sm text-gray-500">
+                          <span className="text-lg font-bold text-gray-900">{formatCurrency(appointment.price)}</span>{' '}
+                          · {PAYMENT_METHODS[appointment.paymentMethod]}
+                        </p>
+                        <div className="flex gap-2 flex-wrap">
+                          {isActive && (
                             <>
-                              <Button variant="ghost" size="sm" onClick={() => setReviewModal(appt)}>
-                                <HiStar className="w-4 h-4" /> Review
-                              </Button>
-                              {appt.payment_id && (
-                                <Button variant="ghost" size="sm" onClick={() => handleDownloadReceipt(appt.payment_id)}>
-                                  <HiDownload className="w-4 h-4" /> Receipt
-                                </Button>
-                              )}
+                              <Button size="sm" variant="outline" onClick={() => setRescheduling(appointment)}>Reschedule</Button>
+                              <Button size="sm" variant="outline" className="!text-red-600 hover:!border-red-400" onClick={() => setCancelling(appointment)}>Cancel</Button>
                             </>
                           )}
-                          {['pending', 'confirmed'].includes(appt.status) && (
-                            <Button variant="ghost" size="sm" className="text-red-500 hover:bg-red-50" onClick={() => setCancelModal(appt)}>
-                              <HiX className="w-4 h-4" /> Cancel
-                            </Button>
+                          {isActive && !isPaid && onlineEnabled && payment && (
+                            <Button size="sm" onClick={() => payOnline(appointment)}>Pay Now</Button>
                           )}
+                          {payment && !isPaid && isActive && (
+                            <Button size="sm" variant="outline" loading={documents.busyId === payment.id} onClick={() => documents.downloadInvoice(payment)}>Invoice</Button>
+                          )}
+                          {payment?.receiptNumber && (
+                            <Button size="sm" variant="outline" loading={documents.busyId === payment.id} onClick={() => documents.downloadReceipt(payment)}>Receipt</Button>
+                          )}
+                          {appointment.status === 'completed' && !appointment.hasReview && (
+                            <Button size="sm" variant="secondary" onClick={() => setReviewing(appointment)}>Leave Review</Button>
+                          )}
+                          {appointment.hasReview && <span className="badge-green self-center">Reviewed</span>}
                         </div>
                       </div>
                     </div>
-                  </motion.div>
-                ))}
-              </div>
-            )}
-            <Pagination {...pagination} onPageChange={setPage} />
-          </>
+                  </article>
+                </Reveal>
+              );
+            })}
+            <Pagination pagination={data.pagination} onPageChange={setPage} />
+          </div>
         )}
-      </div>
+      </section>
 
-      {/* Review Modal */}
-      <Modal isOpen={!!reviewModal} onClose={() => setReviewModal(null)} title="Leave a Review" size="sm">
-        <div className="space-y-4">
-          <p className="text-sm text-gray-500">How was your experience with <strong>{reviewModal?.service_name}</strong>?</p>
-          <div>
-            <label className="label">Rating</label>
-            <StarRating rating={rating} interactive onChange={setRating} size="lg" />
-          </div>
-          <div>
-            <label className="label">Comment</label>
-            <textarea className="input resize-none" rows={4} placeholder="Share your experience..."
-              value={comment} onChange={e => setComment(e.target.value)} />
-          </div>
-          <div className="flex gap-3 justify-end">
-            <Button variant="outline" onClick={() => setReviewModal(null)}>Cancel</Button>
-            <Button onClick={handleReview} loading={submitting}>Submit Review</Button>
-          </div>
-        </div>
-      </Modal>
-
-      {/* Cancel Modal */}
-      <Modal isOpen={!!cancelModal} onClose={() => setCancelModal(null)} title="Cancel Appointment" size="sm">
-        <p className="text-gray-600 mb-6">Are you sure you want to cancel your <strong>{cancelModal?.service_name}</strong> appointment on <strong>{formatDate(cancelModal?.appointment_date)}</strong>?</p>
-        <div className="flex gap-3 justify-end">
-          <Button variant="outline" onClick={() => setCancelModal(null)}>Keep Appointment</Button>
-          <Button variant="danger" onClick={handleCancel} loading={submitting}>Yes, Cancel</Button>
-        </div>
-      </Modal>
-    </div>
+      <RescheduleModal appointment={rescheduling} onClose={() => setRescheduling(null)} onDone={refetch} />
+      <ReviewModal appointment={reviewing} onClose={() => setReviewing(null)} onSubmitted={refetch} />
+      <ConfirmDialog
+        isOpen={Boolean(cancelling)}
+        onClose={() => setCancelling(null)}
+        onConfirm={confirmCancel}
+        loading={working}
+        title="Cancel this appointment?"
+        confirmLabel="Yes, cancel it"
+        message={cancelling ? `${cancelling.service?.name} on ${formatDate(cancelling.date)} at ${formatTime(cancelling.startTime)} will be cancelled and the time released.` : ''}
+      >
+        <Textarea label="Reason (optional)" rows={2} maxLength={500} value={cancelReason} onChange={(event) => setCancelReason(event.target.value)} />
+      </ConfirmDialog>
+    </>
   );
 };
 

@@ -1,82 +1,125 @@
-const { query } = require('../config/database');
-const { paginate } = require('../utils/helpers');
+/**
+ * Admin customer management: list, search, detail (booking + spending history),
+ * create (walk-in), update, activate / deactivate, delete.
+ */
+const crypto = require('crypto');
+const mongoose = require('mongoose');
+const { User, Appointment, Payment, Review, Notification } = require('../models');
+const AppError = require('../utils/AppError');
+const { asyncHandler, paginate, searchRegex, pick } = require('../utils/helpers');
 
-exports.getCustomers = async (req, res) => {
-  try {
-    const { page, limit, offset } = paginate(req.query.page, req.query.limit);
-    const { search } = req.query;
-    let conditions = ["u.role = 'customer'"];
-    let params = [];
-    let idx = 1;
-
-    if (search) {
-      conditions.push(`(u.name ILIKE $${idx} OR u.email ILIKE $${idx} OR u.phone ILIKE $${idx})`);
-      params.push(`%${search}%`); idx++;
-    }
-
-    const where = `WHERE ${conditions.join(' AND ')}`;
-    const countRes = await query(`SELECT COUNT(*) FROM users u ${where}`, params);
-    params.push(limit, offset);
-
-    const result = await query(`
-      SELECT u.id, u.name, u.email, u.phone, u.avatar, u.is_active, u.created_at,
-             c.total_visits, c.total_spent, c.gender,
-             COUNT(DISTINCT a.id) as appointment_count
-      FROM users u
-      LEFT JOIN customers c ON c.user_id = u.id
-      LEFT JOIN appointments a ON a.customer_id = u.id
-      ${where}
-      GROUP BY u.id, c.total_visits, c.total_spent, c.gender
-      ORDER BY u.created_at DESC
-      LIMIT $${idx} OFFSET $${idx + 1}
-    `, params);
-
-    res.json({
-      success: true,
-      data: result.rows,
-      pagination: { page, limit, total: parseInt(countRes.rows[0].count), pages: Math.ceil(countRes.rows[0].count / limit) },
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+const findCustomer = async (id) => {
+  if (!mongoose.isValidObjectId(id)) throw AppError.notFound('Customer');
+  const customer = await User.findOne({ _id: id, role: 'customer' });
+  if (!customer) throw AppError.notFound('Customer');
+  return customer;
 };
 
-exports.getCustomer = async (req, res) => {
-  try {
-    const result = await query(`
-      SELECT u.id, u.name, u.email, u.phone, u.avatar, u.is_active, u.created_at,
-             c.total_visits, c.total_spent, c.gender, c.date_of_birth, c.address, c.notes
-      FROM users u
-      LEFT JOIN customers c ON c.user_id = u.id
-      WHERE u.id = $1
-    `, [req.params.id]);
-
-    if (!result.rows[0]) return res.status(404).json({ success: false, message: 'Customer not found' });
-
-    const appointments = await query(`
-      SELECT a.*, s.name as service_name, eu.name as stylist_name
-      FROM appointments a
-      JOIN services s ON a.service_id = s.id
-      LEFT JOIN employees e ON a.employee_id = e.id
-      LEFT JOIN users eu ON e.user_id = eu.id
-      WHERE a.customer_id = $1
-      ORDER BY a.appointment_date DESC LIMIT 10
-    `, [req.params.id]);
-
-    res.json({ success: true, data: { ...result.rows[0], recent_appointments: appointments.rows } });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+exports.getCustomers = asyncHandler(async (req, res) => {
+  const { search, status, page, limit } = req.query;
+  const filter = { role: 'customer' };
+  if (status === 'active') filter.isActive = true;
+  if (status === 'inactive') filter.isActive = false;
+  if (search) {
+    const regex = searchRegex(search);
+    filter.$or = [{ name: regex }, { email: regex }, { phone: regex }];
   }
-};
 
-exports.toggleCustomerStatus = async (req, res) => {
-  try {
-    const result = await query(
-      'UPDATE users SET is_active = NOT is_active WHERE id = $1 RETURNING id, name, is_active',
-      [req.params.id]
-    );
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  const { items, pagination } = await paginate(User, filter, { page, limit });
+  const ids = items.map((customer) => customer._id);
+
+  // Booking count and lifetime spend for the customers on this page only.
+  const [bookings, spending] = await Promise.all([
+    Appointment.aggregate([{ $match: { customer: { $in: ids } } }, { $group: { _id: '$customer', count: { $sum: 1 } } }]),
+    Payment.aggregate([
+      { $match: { customer: { $in: ids }, status: 'success' } },
+      { $group: { _id: '$customer', total: { $sum: '$amount' } } },
+    ]),
+  ]);
+  const bookingsById = new Map(bookings.map((row) => [String(row._id), row.count]));
+  const spendById = new Map(spending.map((row) => [String(row._id), row.total]));
+
+  res.json({
+    success: true,
+    data: items.map((customer) => ({
+      ...customer.toJSON(),
+      totalBookings: bookingsById.get(customer.id) || 0,
+      totalSpent: spendById.get(customer.id) || 0,
+    })),
+    pagination,
+  });
+});
+
+exports.getCustomer = asyncHandler(async (req, res) => {
+  const customer = await findCustomer(req.params.id);
+
+  const [appointments, payments, statusRows] = await Promise.all([
+    Appointment.find({ customer: customer._id }).sort('-startAt').limit(50)
+      .populate('service', 'name').populate('employee', 'name'),
+    Payment.find({ customer: customer._id }).sort('-createdAt').limit(50)
+      .populate({ path: 'appointment', select: 'reference date service', populate: { path: 'service', select: 'name' } }),
+    Appointment.aggregate([{ $match: { customer: customer._id } }, { $group: { _id: '$status', count: { $sum: 1 } } }]),
+  ]);
+
+  const totalSpent = payments.filter((p) => p.status === 'success').reduce((sum, p) => sum + p.amount, 0);
+  const count = (status) => (statusRows.find((row) => row._id === status) || { count: 0 }).count;
+
+  res.json({
+    success: true,
+    data: {
+      customer,
+      stats: {
+        totalBookings: statusRows.reduce((sum, row) => sum + row.count, 0),
+        completed: count('completed'),
+        cancelled: count('cancelled') + count('rejected'),
+        noShow: count('no_show'),
+        totalSpent,
+      },
+      appointments,
+      payments,
+    },
+  });
+});
+
+/** Admin: register a walk-in / phone customer. They set their own password via "Forgot password". */
+exports.createCustomer = asyncHandler(async (req, res) => {
+  const data = pick(req.body, ['name', 'email', 'phone', 'address']);
+  if (await User.exists({ email: data.email })) throw AppError.conflict('An account with this email already exists');
+  const customer = await User.create({
+    ...data,
+    role: 'customer',
+    password: `${crypto.randomBytes(18).toString('base64url')}aA1!`,
+  });
+  res.status(201).json({ success: true, message: 'Customer created', data: customer });
+});
+
+exports.updateCustomer = asyncHandler(async (req, res) => {
+  const customer = await findCustomer(req.params.id);
+  customer.set(pick(req.body, ['name', 'phone', 'address', 'isActive']));
+  await customer.save();
+  res.json({ success: true, message: 'Customer updated', data: customer });
+});
+
+exports.toggleStatus = asyncHandler(async (req, res) => {
+  const customer = await findCustomer(req.params.id);
+  customer.isActive = !customer.isActive;
+  await customer.save();
+  res.json({
+    success: true,
+    message: customer.isActive ? 'Customer reactivated' : 'Customer deactivated',
+    data: customer,
+  });
+});
+
+exports.deleteCustomer = asyncHandler(async (req, res) => {
+  const customer = await findCustomer(req.params.id);
+  if (await Appointment.exists({ customer: customer._id })) {
+    throw AppError.conflict('This customer has booking history. Deactivate the account instead of deleting it.');
   }
-};
+  await Promise.all([
+    Review.deleteMany({ customer: customer._id }),
+    Notification.deleteMany({ recipient: customer._id }),
+    customer.deleteOne(),
+  ]);
+  res.json({ success: true, message: 'Customer deleted' });
+});

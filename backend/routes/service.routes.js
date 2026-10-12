@@ -1,18 +1,22 @@
-const router = require('express').Router();
-const ctrl = require('../controllers/service.controller');
-const { protect, authorize } = require('../middleware/auth.middleware');
-const upload = require('../middleware/upload.middleware');
+/**
+ * Service routes: public catalogue, admin CRUD.
+ */
+const express = require('express');
+const controller = require('../controllers/service.controller');
+const rules = require('../validators/catalog.validator');
+const { idParam, pagination } = require('../validators/common.validator');
 const validate = require('../middleware/validate.middleware');
-const { serviceValidator } = require('../validators/service.validator');
+const { optionalAuth, adminOnly } = require('../middleware/auth.middleware');
+const { uploadImage } = require('../middleware/upload.middleware');
 
-router.get('/', ctrl.getServices);
-router.get('/:id', ctrl.getService);
-router.post('/', protect, authorize('admin'),
-  (req, res, next) => { req.uploadFolder = 'services'; next(); },
-  upload.single('image'), serviceValidator, validate, ctrl.createService);
-router.put('/:id', protect, authorize('admin'),
-  (req, res, next) => { req.uploadFolder = 'services'; next(); },
-  upload.single('image'), ctrl.updateService);
-router.delete('/:id', protect, authorize('admin'), ctrl.deleteService);
+const router = express.Router();
+
+router.get('/', optionalAuth, validate(pagination), controller.getServices);
+router.get('/popular', controller.getPopularServices);
+router.get('/:id', optionalAuth, validate(idParam), controller.getService);
+
+router.post('/', adminOnly, uploadImage('image'), validate(rules.createService), controller.createService);
+router.put('/:id', adminOnly, uploadImage('image'), validate([...idParam, ...rules.updateService]), controller.updateService);
+router.delete('/:id', adminOnly, validate(idParam), controller.deleteService);
 
 module.exports = router;

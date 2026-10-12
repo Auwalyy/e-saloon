@@ -1,243 +1,329 @@
-const { query } = require('../config/database');
-const emailService = require('../services/email.service');
-const notificationService = require('../services/notification.service');
-const { generateTimeSlots, addMinutes, paginate } = require('../utils/helpers');
+/**
+ * Appointments: availability lookup, booking, and the full lifecycle
+ * (approve, reject, cancel, reschedule, reassign, complete).
+ */
+const mongoose = require('mongoose');
+const { Appointment, Payment, User, Service, Setting, Review } = require('../models');
+const AppError = require('../utils/AppError');
+const { asyncHandler, paginate, searchRegex, generateReference } = require('../utils/helpers');
+const { timeToMinutes, minutesToTime, zonedToUtc } = require('../utils/time');
+const slotService = require('../services/slot.service');
+const paymentService = require('../services/payment.service');
+const notifications = require('../services/notification.service');
 
-exports.getAppointments = async (req, res) => {
-  try {
-    const { page, limit, offset } = paginate(req.query.page, req.query.limit);
-    const { status, date, search } = req.query;
-    const isAdmin = req.user.role === 'admin';
+const POPULATE = [
+  { path: 'customer', select: 'name email phone avatar notificationPreferences' },
+  { path: 'service', select: 'name image duration price' },
+  { path: 'employee', select: 'name photo specialization' },
+];
 
-    let conditions = [];
-    let params = [];
-    let idx = 1;
+const isAdmin = (user) => user.role === 'admin';
 
-    if (!isAdmin) {
-      conditions.push(`a.customer_id = $${idx++}`);
-      params.push(req.user.id);
-    }
-    if (status) { conditions.push(`a.status = $${idx++}`); params.push(status); }
-    if (date) { conditions.push(`a.appointment_date = $${idx++}`); params.push(date); }
-    if (search && isAdmin) {
-      conditions.push(`(u.name ILIKE $${idx} OR s.name ILIKE $${idx})`);
-      params.push(`%${search}%`); idx++;
-    }
+/** Loads an appointment and enforces that customers only ever see their own. */
+const findAccessible = async (id, user) => {
+  if (!mongoose.isValidObjectId(id)) throw AppError.notFound('Appointment');
+  const appointment = await Appointment.findById(id).populate(POPULATE);
+  if (!appointment) throw AppError.notFound('Appointment');
+  if (!isAdmin(user) && String(appointment.customer._id) !== user.id) throw AppError.notFound('Appointment');
+  return appointment;
+};
 
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-
-    const countRes = await query(
-      `SELECT COUNT(*) FROM appointments a
-       JOIN users u ON a.customer_id = u.id
-       JOIN services s ON a.service_id = s.id
-       ${where}`, params
+/** Customers may only change a booking up to N hours before it starts. */
+const assertCustomerCanModify = async (appointment) => {
+  if (!Appointment.ACTIVE_STATUSES.includes(appointment.status)) {
+    throw AppError.badRequest(`A ${appointment.status.replace('_', ' ')} appointment can no longer be changed`);
+  }
+  const { cancellationWindowHours } = await Setting.getMain();
+  const deadline = appointment.startAt.getTime() - cancellationWindowHours * 60 * 60 * 1000;
+  if (Date.now() > deadline) {
+    throw AppError.badRequest(
+      `Appointments can only be changed up to ${cancellationWindowHours} hour(s) before the start time. Please call the salon.`
     );
+  }
+};
 
-    params.push(limit, offset);
-    const result = await query(`
-      SELECT a.*, u.name as customer_name, u.email as customer_email, u.phone as customer_phone,
-             s.name as service_name, s.price as service_price, s.duration as service_duration,
-             eu.name as stylist_name, eu.avatar as stylist_avatar
-      FROM appointments a
-      JOIN users u ON a.customer_id = u.id
-      JOIN services s ON a.service_id = s.id
-      LEFT JOIN employees e ON a.employee_id = e.id
-      LEFT JOIN users eu ON e.user_id = eu.id
-      ${where}
-      ORDER BY a.appointment_date DESC, a.start_time DESC
-      LIMIT $${idx} OFFSET $${idx + 1}
-    `, params);
+/** Moves an appointment to a new slot/stylist, keeping the booking grid consistent. */
+const moveAppointment = async (appointment, { date, startTime, employeeId }) => {
+  const targetEmployee = employeeId || appointment.employee._id;
+  await slotService.assertSlotIsBookable({
+    serviceId: appointment.service._id, employeeId: targetEmployee, date, startTime, excludeAppointmentId: appointment._id,
+  });
 
-    res.json({
-      success: true,
-      data: result.rows,
-      pagination: { page, limit, total: parseInt(countRes.rows[0].count), pages: Math.ceil(countRes.rows[0].count / limit) },
+  const previous = {
+    employeeId: appointment.employee._id, date: appointment.date, startTime: appointment.startTime, duration: appointment.duration,
+  };
+  await slotService.releaseSlots(appointment._id);
+  try {
+    await slotService.reserveSlots({
+      appointmentId: appointment._id, employeeId: targetEmployee, date, startTime, duration: appointment.duration,
     });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  } catch (error) {
+    // Lost a race for the new slot: put the original reservation back.
+    await slotService.reserveSlots({ appointmentId: appointment._id, ...previous }).catch(() => {});
+    throw error;
   }
+
+  const { timezone } = await Setting.getMain();
+  const endTime = minutesToTime(timeToMinutes(startTime) + appointment.duration);
+  appointment.set({
+    employee: targetEmployee,
+    date,
+    startTime,
+    endTime,
+    startAt: zonedToUtc(date, startTime, timezone),
+    endAt: zonedToUtc(date, endTime, timezone),
+    reminderSentAt: null,
+  });
+  await appointment.save();
+  return appointment.populate(POPULATE);
 };
 
-exports.getAppointment = async (req, res) => {
-  try {
-    const result = await query(`
-      SELECT a.*, u.name as customer_name, u.email as customer_email, u.phone as customer_phone,
-             s.name as service_name, s.price as service_price, s.duration as service_duration,
-             eu.name as stylist_name, eu.avatar as stylist_avatar,
-             p.reference as payment_reference, p.method as payment_method, p.status as payment_status_detail
-      FROM appointments a
-      JOIN users u ON a.customer_id = u.id
-      JOIN services s ON a.service_id = s.id
-      LEFT JOIN employees e ON a.employee_id = e.id
-      LEFT JOIN users eu ON e.user_id = eu.id
-      LEFT JOIN payments p ON p.appointment_id = a.id
-      WHERE a.id = $1
-    `, [req.params.id]);
+/* --------------------------------- Lookups --------------------------------- */
 
-    if (!result.rows[0]) return res.status(404).json({ success: false, message: 'Appointment not found' });
-    if (req.user.role !== 'admin' && result.rows[0].customer_id !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+exports.getSlots = asyncHandler(async (req, res) => {
+  const { serviceId, employeeId, date, excludeAppointmentId } = req.query;
+  const slots = await slotService.getSlotsForDate({ serviceId, employeeId, date, excludeAppointmentId });
+  res.json({ success: true, data: slots });
+});
+
+exports.getAvailableDates = asyncHandler(async (req, res) => {
+  const { serviceId, employeeId, month } = req.query;
+  const dates = await slotService.getAvailableDates({ serviceId, employeeId, month });
+  res.json({ success: true, data: dates });
+});
+
+exports.getAppointments = asyncHandler(async (req, res) => {
+  const { status, employee, from, to, search, page, limit, scope } = req.query;
+  const filter = {};
+
+  if (!isAdmin(req.user)) filter.customer = req.user._id;
+  else if (req.query.customer && mongoose.isValidObjectId(req.query.customer)) filter.customer = req.query.customer;
+
+  if (status && Appointment.STATUSES.includes(status)) filter.status = status;
+  if (employee && mongoose.isValidObjectId(employee)) filter.employee = employee;
+  if (from || to) {
+    filter.date = {};
+    if (from) filter.date.$gte = from;
+    if (to) filter.date.$lte = to;
   }
-};
+  if (scope === 'upcoming') {
+    filter.startAt = { $gte: new Date() };
+    filter.status = { $in: Appointment.ACTIVE_STATUSES };
+  } else if (scope === 'past') {
+    filter.$or = [{ startAt: { $lt: new Date() } }, { status: { $nin: Appointment.ACTIVE_STATUSES } }];
+  }
 
-exports.createAppointment = async (req, res) => {
+  if (search && isAdmin(req.user)) {
+    const regex = searchRegex(search);
+    const [customers, services] = await Promise.all([
+      User.find({ $or: [{ name: regex }, { email: regex }, { phone: regex }] }).select('_id').limit(200),
+      Service.find({ name: regex }).select('_id').limit(200),
+    ]);
+    filter.$and = [{
+      $or: [
+        { reference: regex },
+        { customer: { $in: customers.map((c) => c._id) } },
+        { service: { $in: services.map((s) => s._id) } },
+      ],
+    }];
+  }
+
+  const sort = scope === 'upcoming' ? 'startAt' : '-startAt';
+  const { items, pagination } = await paginate(Appointment, filter, { page, limit, sort, populate: POPULATE });
+
+  // Attach each appointment's payment summary and whether it has been reviewed,
+  // so list screens can offer "Pay", "Receipt" and "Review" without extra requests.
+  const ids = items.map((appointment) => appointment._id);
+  const [payments, reviewed] = await Promise.all([
+    Payment.find({ appointment: { $in: ids } }).select('appointment status method reference receiptNumber'),
+    Review.find({ appointment: { $in: ids } }).select('appointment'),
+  ]);
+  const paymentByAppointment = new Map(payments.map((payment) => [String(payment.appointment), payment]));
+  const reviewedIds = new Set(reviewed.map((review) => String(review.appointment)));
+  const data = items.map((appointment) => ({
+    ...appointment.toJSON(),
+    payment: paymentByAppointment.get(appointment.id) || null,
+    hasReview: reviewedIds.has(appointment.id),
+  }));
+  res.json({ success: true, data, pagination });
+});
+
+exports.getAppointment = asyncHandler(async (req, res) => {
+  const appointment = await findAccessible(req.params.id, req.user);
+  const payment = await Payment.findOne({ appointment: appointment._id });
+  res.json({ success: true, data: { ...appointment.toJSON(), payment } });
+});
+
+/* --------------------------------- Booking --------------------------------- */
+
+exports.createAppointment = asyncHandler(async (req, res) => {
+  const { serviceId, employeeId, date, startTime, notes } = req.body;
+  let { paymentMethod = 'cash' } = req.body;
+
+  // Admins can book on behalf of a (walk-in / phone) customer.
+  let customer = req.user;
+  if (isAdmin(req.user)) {
+    if (!req.body.customerId) throw AppError.badRequest('Please choose the customer this booking is for');
+    customer = await User.findOne({ _id: req.body.customerId, role: 'customer' });
+    if (!customer) throw AppError.notFound('Customer');
+  }
+  if (paymentMethod === 'paystack' && !paymentService.isOnlineEnabled()) paymentMethod = 'cash';
+
+  await slotService.assertSlotIsBookable({ serviceId, employeeId, date, startTime });
+  const [service, settings] = await Promise.all([Service.findById(serviceId), Setting.getMain()]);
+  const endTime = minutesToTime(timeToMinutes(startTime) + service.duration);
+
+  const appointment = new Appointment({
+    reference: generateReference('APT'),
+    customer: customer._id,
+    service: service._id,
+    employee: employeeId,
+    date,
+    startTime,
+    endTime,
+    startAt: zonedToUtc(date, startTime, settings.timezone),
+    endAt: zonedToUtc(date, endTime, settings.timezone),
+    duration: service.duration,
+    price: service.price,
+    paymentMethod,
+    notes,
+    // Bookings made by staff are confirmed straight away.
+    status: isAdmin(req.user) ? 'confirmed' : 'pending',
+  });
+
+  // Reserve first: the unique index decides the winner if two people book the same time.
+  await slotService.reserveSlots({
+    appointmentId: appointment._id, employeeId, date, startTime, duration: service.duration,
+  });
+
+  let payment;
   try {
-    const { service_id, employee_id, appointment_date, start_time, notes } = req.body;
-
-    // Get service duration
-    const svcRes = await query('SELECT * FROM services WHERE id = $1 AND is_active = true', [service_id]);
-    if (!svcRes.rows[0]) return res.status(404).json({ success: false, message: 'Service not found' });
-    const service = svcRes.rows[0];
-
-    const end_time = addMinutes(start_time, service.duration);
-
-    // Check employee availability
-    const dayOfWeek = new Date(appointment_date).getDay();
-    const availRes = await query(
-      `SELECT * FROM availability WHERE employee_id = $1 AND day_of_week = $2 AND is_available = true
-       AND start_time <= $3 AND end_time >= $4`,
-      [employee_id, dayOfWeek, start_time, end_time]
-    );
-    if (!availRes.rows[0]) {
-      return res.status(400).json({ success: false, message: 'Stylist not available at this time' });
-    }
-
-    // Check double booking
-    const conflictRes = await query(`
-      SELECT id FROM appointments
-      WHERE employee_id = $1 AND appointment_date = $2
-        AND status NOT IN ('cancelled','no_show')
-        AND (start_time < $4 AND end_time > $3)
-    `, [employee_id, appointment_date, start_time, end_time]);
-
-    if (conflictRes.rows[0]) {
-      return res.status(400).json({ success: false, message: 'This time slot is already booked' });
-    }
-
-    const result = await query(`
-      INSERT INTO appointments (customer_id, employee_id, service_id, appointment_date, start_time, end_time, notes, total_amount)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *
-    `, [req.user.id, employee_id, service_id, appointment_date, start_time, end_time, notes, service.price]);
-
-    const appointment = result.rows[0];
-
-    // Get names for email
-    const empRes = await query('SELECT u.name FROM employees e JOIN users u ON e.user_id = u.id WHERE e.id = $1', [employee_id]);
-
-    await emailService.sendBookingConfirmation(req.user.email, req.user.name, {
-      service_name: service.name,
-      stylist_name: empRes.rows[0]?.name || 'TBD',
-      date: appointment_date,
-      time: start_time,
+    await appointment.save();
+    payment = await Payment.create({
+      reference: generateReference('PAY'),
+      appointment: appointment._id,
+      customer: customer._id,
       amount: service.price,
+      currency: settings.currency,
+      method: paymentMethod,
     });
-
-    await notificationService.notifyAdmins(
-      'New Appointment',
-      `${req.user.name} booked ${service.name} on ${appointment_date} at ${start_time}`,
-      'appointment'
-    );
-
-    res.status(201).json({ success: true, data: appointment });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  } catch (error) {
+    await Promise.all([slotService.releaseSlots(appointment._id), Appointment.deleteOne({ _id: appointment._id })]);
+    throw error;
   }
+
+  await appointment.populate(POPULATE);
+  notifications.dispatch(notifications.onBookingCreated(customer, appointment));
+
+  res.status(201).json({
+    success: true,
+    message: 'Appointment booked successfully',
+    data: { ...appointment.toJSON(), payment },
+  });
+});
+
+/* -------------------------------- Lifecycle -------------------------------- */
+
+/** Shared status change used by the admin endpoints and customer cancellation. */
+const changeStatus = async (appointment, status, { reason, actor }) => {
+  if (appointment.status === status) return appointment;
+  if (!appointment.canTransitionTo(status)) {
+    throw AppError.badRequest(`A ${appointment.status.replace('_', ' ')} appointment cannot be marked as ${status.replace('_', ' ')}`);
+  }
+  if (status === 'completed' && appointment.startAt > new Date()) {
+    throw AppError.badRequest('An appointment cannot be completed before it has started');
+  }
+
+  appointment.status = status;
+  if (['cancelled', 'rejected'].includes(status)) {
+    appointment.cancelReason = reason;
+    appointment.cancelledBy = actor._id;
+  }
+  await appointment.save();
+
+  // Once a booking is dead, free the stylist's time and void any payment still owed.
+  if (!Appointment.ACTIVE_STATUSES.includes(status) && status !== 'completed') {
+    await Promise.all([
+      slotService.releaseSlots(appointment._id),
+      Payment.updateOne({ appointment: appointment._id, status: { $in: ['pending', 'failed'] } }, { status: 'cancelled' }),
+    ]);
+  }
+
+  notifications.dispatch(
+    notifications.onAppointmentStatusChanged(appointment.customer, appointment, { reason, byCustomer: !isAdmin(actor) })
+  );
+  return appointment;
 };
 
-exports.updateAppointment = async (req, res) => {
-  try {
-    const { status, notes, employee_id, appointment_date, start_time, cancellation_reason } = req.body;
-    const apptRes = await query('SELECT * FROM appointments WHERE id = $1', [req.params.id]);
-    if (!apptRes.rows[0]) return res.status(404).json({ success: false, message: 'Appointment not found' });
+exports.updateStatus = asyncHandler(async (req, res) => {
+  const appointment = await findAccessible(req.params.id, req.user);
+  await changeStatus(appointment, req.body.status, { reason: req.body.reason, actor: req.user });
+  res.json({ success: true, message: `Appointment ${req.body.status.replace('_', ' ')}`, data: appointment });
+});
 
-    const appt = apptRes.rows[0];
-    if (req.user.role !== 'admin' && appt.customer_id !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
+exports.cancelAppointment = asyncHandler(async (req, res) => {
+  const appointment = await findAccessible(req.params.id, req.user);
+  if (!isAdmin(req.user)) await assertCustomerCanModify(appointment);
+  await changeStatus(appointment, 'cancelled', { reason: req.body.reason, actor: req.user });
+  res.json({ success: true, message: 'Appointment cancelled', data: appointment });
+});
 
-    let end_time = appt.end_time;
-    if (start_time) {
-      const svcRes = await query('SELECT duration FROM services WHERE id = $1', [appt.service_id]);
-      end_time = addMinutes(start_time, svcRes.rows[0].duration);
-    }
-
-    const result = await query(`
-      UPDATE appointments SET
-        status = COALESCE($1, status),
-        notes = COALESCE($2, notes),
-        employee_id = COALESCE($3, employee_id),
-        appointment_date = COALESCE($4, appointment_date),
-        start_time = COALESCE($5, start_time),
-        end_time = $6,
-        cancellation_reason = COALESCE($7, cancellation_reason)
-      WHERE id = $8 RETURNING *
-    `, [status, notes, employee_id, appointment_date, start_time, end_time, cancellation_reason, req.params.id]);
-
-    if (status === 'cancelled') {
-      const custRes = await query('SELECT name, email FROM users WHERE id = $1', [appt.customer_id]);
-      const svcRes = await query('SELECT name FROM services WHERE id = $1', [appt.service_id]);
-      await emailService.sendCancellationEmail(custRes.rows[0].email, custRes.rows[0].name, {
-        service_name: svcRes.rows[0].name,
-        date: appt.appointment_date,
-      });
-    }
-
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+exports.rescheduleAppointment = asyncHandler(async (req, res) => {
+  const appointment = await findAccessible(req.params.id, req.user);
+  if (!Appointment.ACTIVE_STATUSES.includes(appointment.status)) {
+    throw AppError.badRequest(`A ${appointment.status.replace('_', ' ')} appointment cannot be rescheduled`);
   }
-};
+  if (!isAdmin(req.user)) await assertCustomerCanModify(appointment);
 
-exports.deleteAppointment = async (req, res) => {
-  try {
-    await query('DELETE FROM appointments WHERE id = $1', [req.params.id]);
-    res.json({ success: true, message: 'Appointment deleted' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+  const { date, startTime, employeeId } = req.body;
+  const updated = await moveAppointment(appointment, { date, startTime, employeeId });
+  notifications.dispatch(
+    notifications.onAppointmentRescheduled(updated.customer, updated, { byCustomer: !isAdmin(req.user) })
+  );
+  res.json({ success: true, message: 'Appointment rescheduled', data: updated });
+});
 
-exports.getAvailableSlots = async (req, res) => {
-  try {
-    const { employee_id, service_id, date } = req.query;
-    if (!employee_id || !service_id || !date) {
-      return res.status(400).json({ success: false, message: 'employee_id, service_id, and date are required' });
+/** Admin: general update (assign a different stylist, edit notes, move, change status). */
+exports.updateAppointment = asyncHandler(async (req, res) => {
+  let appointment = await findAccessible(req.params.id, req.user);
+  const { employeeId, date, startTime, notes, status, reason } = req.body;
+
+  const wantsMove =
+    (employeeId && employeeId !== String(appointment.employee._id)) ||
+    (date && date !== appointment.date) ||
+    (startTime && startTime !== appointment.startTime);
+
+  if (wantsMove) {
+    if (!Appointment.ACTIVE_STATUSES.includes(appointment.status)) {
+      throw AppError.badRequest('Only pending or confirmed appointments can be moved or reassigned');
     }
-
-    const svcRes = await query('SELECT duration FROM services WHERE id = $1', [service_id]);
-    if (!svcRes.rows[0]) return res.status(404).json({ success: false, message: 'Service not found' });
-
-    const dayOfWeek = new Date(date).getDay();
-    const availRes = await query(
-      'SELECT start_time, end_time FROM availability WHERE employee_id = $1 AND day_of_week = $2 AND is_available = true',
-      [employee_id, dayOfWeek]
-    );
-
-    if (!availRes.rows[0]) return res.json({ success: true, slots: [] });
-
-    const { start_time, end_time } = availRes.rows[0];
-    const duration = svcRes.rows[0].duration;
-    const allSlots = generateTimeSlots(start_time, end_time, duration);
-
-    // Get booked slots
-    const bookedRes = await query(`
-      SELECT start_time, end_time FROM appointments
-      WHERE employee_id = $1 AND appointment_date = $2 AND status NOT IN ('cancelled','no_show')
-    `, [employee_id, date]);
-
-    const available = allSlots.filter((slot) => {
-      const slotEnd = addMinutes(slot, duration);
-      return !bookedRes.rows.some(
-        (b) => !(slotEnd <= b.start_time.slice(0, 5) || slot >= b.end_time.slice(0, 5))
-      );
+    appointment = await moveAppointment(appointment, {
+      date: date || appointment.date,
+      startTime: startTime || appointment.startTime,
+      employeeId,
     });
-
-    res.json({ success: true, slots: available });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    notifications.dispatch(notifications.onAppointmentRescheduled(appointment.customer, appointment));
   }
-};
+  if (notes !== undefined) {
+    appointment.notes = notes;
+    await appointment.save();
+  }
+  if (status) await changeStatus(appointment, status, { reason, actor: req.user });
+
+  res.json({ success: true, message: 'Appointment updated', data: appointment });
+});
+
+exports.deleteAppointment = asyncHandler(async (req, res) => {
+  const appointment = await findAccessible(req.params.id, req.user);
+  const payment = await Payment.findOne({ appointment: appointment._id });
+  if (payment && payment.status === 'success') {
+    throw AppError.badRequest('A paid appointment cannot be deleted. Cancel it and refund the payment instead.');
+  }
+  await Promise.all([
+    slotService.releaseSlots(appointment._id),
+    Payment.deleteOne({ appointment: appointment._id }),
+    Review.deleteOne({ appointment: appointment._id }),
+    appointment.deleteOne(),
+  ]);
+  res.json({ success: true, message: 'Appointment deleted' });
+});

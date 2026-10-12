@@ -1,58 +1,50 @@
-const { query } = require('../config/database');
+/**
+ * Service categories: public list and admin CRUD.
+ */
+const { Category, Service } = require('../models');
+const AppError = require('../utils/AppError');
+const { asyncHandler, pick } = require('../utils/helpers');
+const mediaService = require('../services/media.service');
 
-exports.getCategories = async (req, res) => {
-  try {
-    const result = await query(`
-      SELECT c.*, COUNT(s.id) as service_count
-      FROM categories c
-      LEFT JOIN services s ON s.category_id = c.id AND s.is_active = true
-      WHERE c.is_active = true
-      GROUP BY c.id ORDER BY c.name
-    `);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+const FIELDS = ['name', 'description', 'isActive'];
 
-exports.createCategory = async (req, res) => {
-  try {
-    const { name, description } = req.body;
-    const image = req.file?.path || null;
-    const result = await query(
-      'INSERT INTO categories (name, description, image) VALUES ($1,$2,$3) RETURNING *',
-      [name, description, image]
-    );
-    res.status(201).json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+exports.getCategories = asyncHandler(async (req, res) => {
+  const isAdmin = req.user && req.user.role === 'admin';
+  const categories = await Category.find(isAdmin ? {} : { isActive: true }).sort('name');
 
-exports.updateCategory = async (req, res) => {
-  try {
-    const { name, description, is_active } = req.body;
-    const image = req.file?.path;
-    const result = await query(`
-      UPDATE categories SET
-        name = COALESCE($1, name),
-        description = COALESCE($2, description),
-        image = COALESCE($3, image),
-        is_active = COALESCE($4, is_active)
-      WHERE id = $5 RETURNING *
-    `, [name, description, image, is_active, req.params.id]);
-    if (!result.rows[0]) return res.status(404).json({ success: false, message: 'Category not found' });
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+  const counts = await Service.aggregate([
+    { $match: isAdmin ? {} : { isActive: true } },
+    { $group: { _id: '$category', count: { $sum: 1 } } },
+  ]);
+  const countById = new Map(counts.map((row) => [String(row._id), row.count]));
 
-exports.deleteCategory = async (req, res) => {
-  try {
-    await query('UPDATE categories SET is_active = false WHERE id = $1', [req.params.id]);
-    res.json({ success: true, message: 'Category deactivated' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+  res.json({
+    success: true,
+    data: categories.map((category) => ({ ...category.toJSON(), serviceCount: countById.get(category.id) || 0 })),
+  });
+});
+
+exports.createCategory = asyncHandler(async (req, res) => {
+  const data = pick(req.body, FIELDS);
+  data.image = (await mediaService.saveImage(req.file, req.user.id)) || '';
+  const category = await Category.create(data);
+  res.status(201).json({ success: true, message: 'Category created', data: category });
+});
+
+exports.updateCategory = asyncHandler(async (req, res) => {
+  const category = await Category.findById(req.params.id);
+  if (!category) throw AppError.notFound('Category');
+  category.set(pick(req.body, FIELDS));
+  if (req.file) category.image = await mediaService.replaceImage(req.file, category.image, req.user.id);
+  await category.save();
+  res.json({ success: true, message: 'Category updated', data: category });
+});
+
+exports.deleteCategory = asyncHandler(async (req, res) => {
+  const category = await Category.findById(req.params.id);
+  if (!category) throw AppError.notFound('Category');
+  const inUse = await Service.countDocuments({ category: category._id });
+  if (inUse) throw AppError.conflict(`This category still has ${inUse} service(s). Move or delete them first.`);
+  await Promise.all([mediaService.removeImage(category.image), category.deleteOne()]);
+  res.json({ success: true, message: 'Category deleted' });
+});

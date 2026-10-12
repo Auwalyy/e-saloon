@@ -1,11 +1,16 @@
-const router = require('express').Router();
-const ctrl = require('../controllers/settings.controller');
-const { protect, authorize } = require('../middleware/auth.middleware');
-const upload = require('../middleware/upload.middleware');
+/**
+ * Settings routes: public read, admin update.
+ */
+const express = require('express');
+const controller = require('../controllers/settings.controller');
+const rules = require('../validators/catalog.validator');
+const validate = require('../middleware/validate.middleware');
+const { adminOnly } = require('../middleware/auth.middleware');
+const { uploadImage } = require('../middleware/upload.middleware');
 
-router.get('/', ctrl.getSettings);
-router.put('/', protect, authorize('admin'),
-  (req, res, next) => { req.uploadFolder = 'settings'; next(); },
-  upload.single('logo'), ctrl.updateSettings);
+const router = express.Router();
+
+router.get('/', controller.getSettings);
+router.put('/', adminOnly, uploadImage('logo'), validate(rules.settings), controller.updateSettings);
 
 module.exports = router;

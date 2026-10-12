@@ -1,171 +1,116 @@
-import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-} from 'recharts';
-import {
-  HiCurrencyDollar, HiUsers, HiCalendar, HiCheckCircle,
-  HiXCircle, HiClock, HiUserGroup, HiTrendingUp,
+  HiOutlineBan, HiOutlineCalendar, HiOutlineCash, HiOutlineCheckCircle, HiOutlineClock, HiOutlineCurrencyDollar,
+  HiOutlineExclamation, HiOutlineTrendingUp, HiOutlineUserGroup, HiOutlineUsers,
 } from 'react-icons/hi';
-import { dashboardService } from '../../services/index';
-import { formatCurrency, formatDate } from '../../utils/helpers';
+import useFetch from '../../hooks/useFetch';
+import { dashboardService } from '../../services';
+import { formatCurrency, formatDate, formatTime, getStatusColor, humanize } from '../../utils/helpers';
+import PageHeader from '../../components/admin/PageHeader';
+import {
+  BookingStatusChart, BookingTrendChart, ChartCard, CustomerGrowthChart, RankingChart, RevenueChart,
+} from '../../components/admin/Charts';
 import StatsCard from '../../components/ui/StatsCard';
-import { Skeleton } from '../../components/ui/Skeleton';
+import Avatar from '../../components/ui/Avatar';
+import Button from '../../components/ui/Button';
+import EmptyState from '../../components/ui/EmptyState';
+import { Skeleton, StatsSkeleton } from '../../components/ui/Skeleton';
 
-const COLORS = ['#D4AF37', '#10b981', '#3b82f6', '#ef4444', '#8b5cf6'];
-
+/** Admin overview: revenue, bookings and customer numbers with charts. */
 const Dashboard = () => {
-  const [stats, setStats] = useState(null);
-  const [activity, setActivity] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const { data, loading, error, refetch } = useFetch(() => dashboardService.get());
 
-  useEffect(() => {
-    Promise.all([dashboardService.getStats(), dashboardService.getActivity()])
-      .then(([s, a]) => { setStats(s.data.data); setActivity(a.data.data); })
-      .finally(() => setLoading(false));
-  }, []);
-
-  if (loading) return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {Array(8).fill(0).map((_, i) => <Skeleton key={i} className="h-28 rounded-2xl" />)}
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <Skeleton className="h-8 w-48" />
+        <StatsSkeleton count={8} />
+        <div className="grid gap-6 lg:grid-cols-3"><Skeleton className="h-80 lg:col-span-2" /><Skeleton className="h-80" /></div>
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {Array(4).fill(0).map((_, i) => <Skeleton key={i} className="h-64 rounded-2xl" />)}
-      </div>
-    </div>
-  );
+    );
+  }
+  if (error) return <EmptyState title="Unable to load the dashboard" message={error} action={<Button onClick={refetch}>Try again</Button>} />;
 
-  const s = stats?.stats || {};
-  const charts = stats?.charts || {};
-
-  const statCards = [
-    { title: "Today's Revenue", value: formatCurrency(s.today_revenue), icon: HiCurrencyDollar, color: 'gold' },
-    { title: 'Monthly Revenue', value: formatCurrency(s.month_revenue), icon: HiTrendingUp, color: 'green' },
-    { title: 'Total Customers', value: s.total_customers?.toLocaleString(), icon: HiUsers, color: 'blue' },
-    { title: 'Total Employees', value: s.total_employees, icon: HiUserGroup, color: 'purple' },
-    { title: 'Total Bookings', value: s.total_bookings?.toLocaleString(), icon: HiCalendar, color: 'gold' },
-    { title: 'Pending', value: s.pending_appointments, icon: HiClock, color: 'gold' },
-    { title: 'Completed', value: s.completed_appointments, icon: HiCheckCircle, color: 'green' },
-    { title: 'Cancelled', value: s.cancelled_appointments, icon: HiXCircle, color: 'red' },
-  ];
+  const { stats, charts, upcomingAppointments } = data.data;
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-serif font-bold text-gray-900">Dashboard</h1>
-        <p className="text-gray-500 text-sm mt-1">Welcome back! Here's what's happening today.</p>
+      <PageHeader title="Dashboard" subtitle="How the salon is doing right now.">
+        <Link to="/admin/appointments" className="btn-primary !py-2 !px-4 !text-sm">Manage Appointments</Link>
+      </PageHeader>
+
+      {stats.lowStockCount > 0 && (
+        <Link to="/admin/inventory" className="flex items-center gap-3 bg-gold-50 border border-gold-200 text-gold-900 rounded-2xl px-4 py-3 text-sm hover:bg-gold-100 transition-colors">
+          <HiOutlineExclamation className="w-5 h-5 shrink-0" />
+          <span><strong>{stats.lowStockCount}</strong> inventory item{stats.lowStockCount === 1 ? ' is' : 's are'} at or below the reorder level. Review stock</span>
+        </Link>
+      )}
+
+      {/* Revenue */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatsCard title="Today's Revenue" value={formatCurrency(stats.todayRevenue)} icon={HiOutlineCash} color="gold" subtitle={`${stats.todayAppointments} appointment${stats.todayAppointments === 1 ? '' : 's'} today`} />
+        <StatsCard title="Weekly Revenue" value={formatCurrency(stats.weekRevenue)} icon={HiOutlineTrendingUp} color="green" subtitle="Monday to today" delay={0.05} />
+        <StatsCard title="Monthly Revenue" value={formatCurrency(stats.monthRevenue)} icon={HiOutlineCurrencyDollar} color="blue" change={stats.monthRevenueChange} changeLabel="vs same period last month" delay={0.1} />
+        <StatsCard title="Outstanding Payments" value={formatCurrency(stats.outstandingPayments)} icon={HiOutlineClock} color="purple" subtitle="Booked but not yet paid" delay={0.15} />
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {statCards.map((card, i) => (
-          <motion.div key={card.title} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}>
-            <StatsCard {...card} />
-          </motion.div>
-        ))}
+      {/* Volume */}
+      <div className="grid gap-4 grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        <StatsCard title="Customers" compact value={stats.totalCustomers} icon={HiOutlineUsers} color="blue" />
+        <StatsCard title="Employees" compact value={stats.totalEmployees} icon={HiOutlineUserGroup} color="purple" delay={0.03} />
+        <StatsCard title="Bookings" compact value={stats.totalBookings} icon={HiOutlineCalendar} color="gold" delay={0.06} />
+        <StatsCard title="Pending" compact value={stats.pendingAppointments} icon={HiOutlineClock} color="gold" delay={0.09} />
+        <StatsCard title="Completed" compact value={stats.completedAppointments} icon={HiOutlineCheckCircle} color="green" delay={0.12} />
+        <StatsCard title="Cancelled" compact value={stats.cancelledAppointments} icon={HiOutlineBan} color="red" delay={0.15} />
       </div>
 
-      {/* Charts Row 1 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Revenue Chart */}
-        <div className="card">
-          <h3 className="font-semibold text-gray-900 mb-4">Revenue (Last 7 Days)</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={charts.revenue || []}>
-              <defs>
-                <linearGradient id="revenueGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#D4AF37" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#D4AF37" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={d => formatDate(d, 'MMM dd')} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `₦${(v / 1000).toFixed(0)}k`} />
-              <Tooltip formatter={v => formatCurrency(v)} labelFormatter={d => formatDate(d)} />
-              <Area type="monotone" dataKey="revenue" stroke="#D4AF37" strokeWidth={2} fill="url(#revenueGrad)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Booking Status Pie */}
-        <div className="card">
-          <h3 className="font-semibold text-gray-900 mb-4">Booking Status</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <PieChart>
-              <Pie data={charts.bookings || []} dataKey="count" nameKey="status" cx="50%" cy="50%" outerRadius={80} label={({ status, percent }) => `${status} ${(percent * 100).toFixed(0)}%`}>
-                {(charts.bookings || []).map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-        </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <ChartCard title="Revenue" subtitle="Payments received per day, last 30 days" className="lg:col-span-2">
+          <RevenueChart data={charts.revenue} />
+        </ChartCard>
+        <ChartCard title="Booking Statistics" subtitle="All bookings by current status">
+          <BookingStatusChart data={charts.bookingStatus} />
+        </ChartCard>
       </div>
 
-      {/* Charts Row 2 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Popular Services */}
-        <div className="card">
-          <h3 className="font-semibold text-gray-900 mb-4">Popular Services</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={charts.popular_services || []} layout="vertical">
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis type="number" tick={{ fontSize: 11 }} />
-              <YAxis dataKey="name" type="category" tick={{ fontSize: 10 }} width={100} />
-              <Tooltip />
-              <Bar dataKey="bookings" fill="#D4AF37" radius={[0, 4, 4, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Customer Growth */}
-        <div className="card">
-          <h3 className="font-semibold text-gray-900 mb-4">Customer Growth</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={charts.customer_growth || []}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Bar dataKey="count" fill="#10b981" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <ChartCard title="Bookings per Month" subtitle="Completed versus cancelled, last 12 months">
+          <BookingTrendChart data={charts.bookingTrend} />
+        </ChartCard>
+        <ChartCard title="Customer Growth" subtitle="Registered customers, last 12 months">
+          <CustomerGrowthChart data={charts.customerGrowth} />
+        </ChartCard>
+        <ChartCard title="Popular Services" subtitle="Most booked services of all time">
+          <RankingChart data={charts.popularServices} />
+        </ChartCard>
       </div>
 
-      {/* Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="card">
-          <h3 className="font-semibold text-gray-900 mb-4">Recent Appointments</h3>
-          <div className="space-y-3">
-            {(activity?.appointments || []).slice(0, 5).map(a => (
-              <div key={a.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{a.customer_name}</p>
-                  <p className="text-xs text-gray-400">{a.service_name} · {formatDate(a.appointment_date)}</p>
+      <section className="card">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-gray-900 font-sans">Upcoming Appointments</h2>
+          <Link to="/admin/appointments" className="text-sm text-gold-700 font-medium hover:underline">View all</Link>
+        </div>
+        {upcomingAppointments.length === 0 ? (
+          <p className="text-sm text-gray-500 py-6 text-center">No upcoming appointments.</p>
+        ) : (
+          <ul className="divide-y divide-gray-100">
+            {upcomingAppointments.map((appointment) => (
+              <li key={appointment.id} className="py-3 flex items-center gap-4">
+                <Avatar src={appointment.customer?.avatar} name={appointment.customer?.name} />
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-gray-900 truncate">{appointment.customer?.name}</p>
+                  <p className="text-sm text-gray-500 truncate">{appointment.service?.name} with {appointment.employee?.name}</p>
                 </div>
-                <span className={`badge ${a.status === 'completed' ? 'badge-green' : a.status === 'cancelled' ? 'badge-red' : 'badge-gold'}`}>{a.status}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="card">
-          <h3 className="font-semibold text-gray-900 mb-4">Recent Payments</h3>
-          <div className="space-y-3">
-            {(activity?.payments || []).slice(0, 5).map(p => (
-              <div key={p.id} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{p.customer_name}</p>
-                  <p className="text-xs text-gray-400 capitalize">{p.method} · {formatDate(p.created_at)}</p>
+                <div className="text-right text-sm shrink-0">
+                  <p className="font-medium text-gray-900">{formatDate(appointment.date, 'EEE, d MMM')}</p>
+                  <p className="text-gray-500">{formatTime(appointment.startTime)}</p>
                 </div>
-                <span className="font-semibold text-gold-600 text-sm">{formatCurrency(p.amount)}</span>
-              </div>
+                <span className={`${getStatusColor(appointment.status)} hidden sm:inline-flex`}>{humanize(appointment.status)}</span>
+              </li>
             ))}
-          </div>
-        </div>
-      </div>
+          </ul>
+        )}
+      </section>
     </div>
   );
 };

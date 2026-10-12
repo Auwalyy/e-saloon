@@ -1,30 +1,57 @@
-import { useState, useEffect } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { HiMenu, HiX, HiUser, HiLogout, HiCalendar } from 'react-icons/hi';
+import { HiMenu, HiX, HiOutlineUser, HiOutlineLogout, HiOutlineCalendar, HiOutlineCog, HiOutlineViewGrid } from 'react-icons/hi';
 import { useAuth } from '../../context/AuthContext';
+import Avatar from '../ui/Avatar';
+import Logo from './Logo';
+import NotificationBell from './NotificationBell';
 
-const navLinks = [
+const NAV_LINKS = [
   { to: '/', label: 'Home' },
   { to: '/about', label: 'About' },
   { to: '/services', label: 'Services' },
   { to: '/stylists', label: 'Stylists' },
   { to: '/gallery', label: 'Gallery' },
   { to: '/pricing', label: 'Pricing' },
+  { to: '/reviews', label: 'Reviews' },
   { to: '/contact', label: 'Contact' },
 ];
 
+const ACCOUNT_LINKS = [
+  { to: '/my-bookings', label: 'My Bookings', icon: HiOutlineCalendar },
+  { to: '/profile', label: 'Profile', icon: HiOutlineUser },
+  { to: '/settings', label: 'Settings', icon: HiOutlineCog },
+];
+
+/** Top navigation for the customer website (responsive, with account menu). */
 const Navbar = () => {
-  const [open, setOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const { user, logout } = useAuth();
+  const { user, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const menuRef = useRef(null);
 
   useEffect(() => {
-    const handler = () => setScrolled(window.scrollY > 20);
-    window.addEventListener('scroll', handler);
-    return () => window.removeEventListener('scroll', handler);
+    const onScroll = () => setScrolled(window.scrollY > 10);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  // Close menus whenever the route changes.
+  useEffect(() => {
+    setMobileOpen(false);
+    setMenuOpen(false);
+  }, [pathname]);
+
+  useEffect(() => {
+    const onClick = (event) => {
+      if (menuRef.current && !menuRef.current.contains(event.target)) setMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
   }, []);
 
   const handleLogout = async () => {
@@ -33,129 +60,125 @@ const Navbar = () => {
   };
 
   return (
-    <nav className={`fixed top-0 left-0 right-0 z-40 transition-all duration-300 ${scrolled ? 'bg-white shadow-md' : 'bg-transparent'}`}>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16">
-          {/* Logo */}
-          <Link to="/" className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-gold-500 rounded-full flex items-center justify-center">
-              <span className="text-white font-bold text-sm">A</span>
-            </div>
-            <span className="font-serif font-bold text-xl text-gray-900">Aisha's Salon</span>
-          </Link>
+    <header className={`fixed top-0 inset-x-0 z-40 bg-white/95 backdrop-blur transition-shadow duration-300 ${scrolled ? 'shadow-md' : 'shadow-sm'}`}>
+      <div className="container-page">
+        <div className="flex items-center justify-between h-16 gap-4">
+          <Logo />
 
-          {/* Desktop Nav */}
-          <div className="hidden lg:flex items-center gap-1">
-            {navLinks.map(({ to, label }) => (
+          <nav className="hidden xl:flex items-center gap-0.5" aria-label="Main">
+            {NAV_LINKS.map(({ to, label }) => (
               <NavLink
                 key={to}
                 to={to}
                 end={to === '/'}
                 className={({ isActive }) =>
                   `px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    isActive ? 'text-gold-600 bg-gold-50' : 'text-gray-700 hover:text-gold-600 hover:bg-gold-50'
+                    isActive ? 'text-gold-700 bg-gold-50' : 'text-gray-700 hover:text-gold-700 hover:bg-gold-50'
                   }`
                 }
               >
                 {label}
               </NavLink>
             ))}
-          </div>
+          </nav>
 
-          {/* Actions */}
-          <div className="hidden lg:flex items-center gap-3">
-            <Link to="/book" className="btn-primary text-sm py-2 px-4">
-              Book Now
-            </Link>
+          <div className="flex items-center gap-2">
+            <Link to="/book" className="btn-primary !text-sm !py-2 !px-4 hidden sm:inline-flex">Book Now</Link>
+
             {user ? (
-              <div className="relative">
-                <button
-                  onClick={() => setDropdownOpen(!dropdownOpen)}
-                  className="flex items-center gap-2 p-2 rounded-xl hover:bg-gray-100 transition-colors"
-                >
-                  {user.avatar ? (
-                    <img src={user.avatar} alt={user.name} className="w-8 h-8 rounded-full object-cover" />
-                  ) : (
-                    <div className="w-8 h-8 bg-gold-500 rounded-full flex items-center justify-center text-white text-sm font-bold">
-                      {user.name?.[0]}
-                    </div>
-                  )}
-                  <span className="text-sm font-medium text-gray-700">{user.name?.split(' ')[0]}</span>
-                </button>
-                <AnimatePresence>
-                  {dropdownOpen && (
-                    <motion.div
-                      initial={{ opacity: 0, y: 8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, y: 8 }}
-                      className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2"
-                    >
-                      <Link to="/profile" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50" onClick={() => setDropdownOpen(false)}>
-                        <HiUser className="w-4 h-4" /> Profile
-                      </Link>
-                      <Link to="/my-bookings" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50" onClick={() => setDropdownOpen(false)}>
-                        <HiCalendar className="w-4 h-4" /> My Bookings
-                      </Link>
-                      {user.role === 'admin' && (
-                        <Link to="/admin" className="flex items-center gap-2 px-4 py-2 text-sm text-gold-600 hover:bg-gold-50" onClick={() => setDropdownOpen(false)}>
-                          Admin Dashboard
-                        </Link>
-                      )}
-                      <hr className="my-1 border-gray-100" />
-                      <button onClick={handleLogout} className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 w-full">
-                        <HiLogout className="w-4 h-4" /> Logout
-                      </button>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
+              <>
+                <NotificationBell />
+                <div className="relative" ref={menuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setMenuOpen((value) => !value)}
+                    className="flex items-center gap-2 p-1 rounded-full hover:bg-gray-100 transition-colors"
+                    aria-haspopup="menu"
+                    aria-expanded={menuOpen}
+                    aria-label="Account menu"
+                  >
+                    <Avatar src={user.avatar} name={user.name} size="sm" />
+                  </button>
+                  <AnimatePresence>
+                    {menuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: 8 }}
+                        role="menu"
+                        className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-xl border border-gray-100 py-2 z-50"
+                      >
+                        <div className="px-4 py-2 border-b border-gray-100 mb-1">
+                          <p className="text-sm font-semibold text-gray-900 truncate">{user.name}</p>
+                          <p className="text-xs text-gray-500 truncate">{user.email}</p>
+                        </div>
+                        {isAdmin && (
+                          <Link to="/admin" role="menuitem" className="flex items-center gap-2 px-4 py-2 text-sm text-gold-700 font-medium hover:bg-gold-50">
+                            <HiOutlineViewGrid className="w-4 h-4" /> Admin Dashboard
+                          </Link>
+                        )}
+                        {ACCOUNT_LINKS.map(({ to, label, icon: Icon }) => (
+                          <Link key={to} to={to} role="menuitem" className="flex items-center gap-2 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50">
+                            <Icon className="w-4 h-4" /> {label}
+                          </Link>
+                        ))}
+                        <hr className="my-1 border-gray-100" />
+                        <button type="button" onClick={handleLogout} role="menuitem" className="flex items-center gap-2 px-4 py-2 text-sm text-red-600 hover:bg-red-50 w-full">
+                          <HiOutlineLogout className="w-4 h-4" /> Logout
+                        </button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              </>
             ) : (
-              <Link to="/login" className="btn-outline text-sm py-2 px-4">Login</Link>
+              <Link to="/login" className="btn-outline !text-sm hidden sm:inline-flex">Login</Link>
             )}
-          </div>
 
-          {/* Mobile menu button */}
-          <button className="lg:hidden p-2 rounded-lg hover:bg-gray-100" onClick={() => setOpen(!open)}>
-            {open ? <HiX className="w-6 h-6" /> : <HiMenu className="w-6 h-6" />}
-          </button>
+            <button
+              type="button"
+              className="xl:hidden icon-btn"
+              onClick={() => setMobileOpen((value) => !value)}
+              aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+              aria-expanded={mobileOpen}
+            >
+              {mobileOpen ? <HiX className="w-6 h-6" /> : <HiMenu className="w-6 h-6" />}
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Mobile Menu */}
       <AnimatePresence>
-        {open && (
-          <motion.div
+        {mobileOpen && (
+          <motion.nav
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
-            className="lg:hidden bg-white border-t border-gray-100 shadow-lg"
+            className="xl:hidden bg-white border-t border-gray-100 shadow-lg overflow-hidden"
+            aria-label="Mobile"
           >
-            <div className="px-4 py-4 space-y-1">
-              {navLinks.map(({ to, label }) => (
-                <NavLink key={to} to={to} end={to === '/'} onClick={() => setOpen(false)}
+            <div className="px-4 py-4 space-y-1 max-h-[calc(100vh-4rem)] overflow-y-auto">
+              {NAV_LINKS.map(({ to, label }) => (
+                <NavLink
+                  key={to}
+                  to={to}
+                  end={to === '/'}
                   className={({ isActive }) =>
-                    `block px-4 py-2 rounded-lg text-sm font-medium ${isActive ? 'text-gold-600 bg-gold-50' : 'text-gray-700'}`
+                    `block px-4 py-2.5 rounded-lg text-sm font-medium ${isActive ? 'text-gold-700 bg-gold-50' : 'text-gray-700'}`
                   }
                 >
                   {label}
                 </NavLink>
               ))}
-              <div className="pt-2 border-t border-gray-100 space-y-2">
-                <Link to="/book" className="btn-primary w-full text-center block" onClick={() => setOpen(false)}>Book Now</Link>
-                {user ? (
-                  <>
-                    <Link to="/profile" className="block px-4 py-2 text-sm text-gray-700" onClick={() => setOpen(false)}>Profile</Link>
-                    <button onClick={() => { handleLogout(); setOpen(false); }} className="block px-4 py-2 text-sm text-red-600 w-full text-left">Logout</button>
-                  </>
-                ) : (
-                  <Link to="/login" className="btn-outline w-full text-center block" onClick={() => setOpen(false)}>Login</Link>
-                )}
+              <div className="pt-3 mt-2 border-t border-gray-100 grid gap-2">
+                <Link to="/book" className="btn-primary w-full">Book Now</Link>
+                {!user && <Link to="/login" className="btn-outline w-full !py-3">Login</Link>}
               </div>
             </div>
-          </motion.div>
+          </motion.nav>
         )}
       </AnimatePresence>
-    </nav>
+    </header>
   );
 };
 

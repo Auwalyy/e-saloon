@@ -1,168 +1,184 @@
-const { query } = require('../config/database');
+/**
+ * Payments: listing, online checkout (Paystack), manual settlement,
+ * refunds, and PDF receipts / invoices.
+ */
+const mongoose = require('mongoose');
+const env = require('../config/env');
+const { Payment, Appointment, User, Setting } = require('../models');
+const AppError = require('../utils/AppError');
+const { asyncHandler, paginate, searchRegex } = require('../utils/helpers');
 const paymentService = require('../services/payment.service');
-const emailService = require('../services/email.service');
 const pdfService = require('../services/pdf.service');
-const { generateReference, paginate } = require('../utils/helpers');
 
-exports.getPayments = async (req, res) => {
-  try {
-    const { page, limit, offset } = paginate(req.query.page, req.query.limit);
-    const { status, method, search } = req.query;
-    const isAdmin = req.user.role === 'admin';
+const isAdmin = (user) => user.role === 'admin';
 
-    let conditions = [];
-    let params = [];
-    let idx = 1;
+const LIST_POPULATE = [
+  { path: 'customer', select: 'name email phone' },
+  { path: 'appointment', select: 'reference date startTime status service', populate: { path: 'service', select: 'name' } },
+];
 
-    if (!isAdmin) { conditions.push(`p.customer_id = $${idx++}`); params.push(req.user.id); }
-    if (status) { conditions.push(`p.status = $${idx++}`); params.push(status); }
-    if (method) { conditions.push(`p.method = $${idx++}`); params.push(method); }
-    if (search && isAdmin) {
-      conditions.push(`(u.name ILIKE $${idx} OR p.reference ILIKE $${idx})`);
-      params.push(`%${search}%`); idx++;
-    }
+const findAccessible = async (id, user) => {
+  if (!mongoose.isValidObjectId(id)) throw AppError.notFound('Payment');
+  const payment = await paymentService.populatePayment(Payment.findById(id));
+  if (!payment) throw AppError.notFound('Payment');
+  if (!isAdmin(user) && String(payment.customer._id) !== user.id) throw AppError.notFound('Payment');
+  return payment;
+};
 
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const countRes = await query(`SELECT COUNT(*) FROM payments p JOIN users u ON p.customer_id = u.id ${where}`, params);
-    params.push(limit, offset);
+/** Public: tells the frontend which payment options to offer. */
+exports.getConfig = (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      onlineEnabled: paymentService.isOnlineEnabled(),
+      provider: paymentService.isOnlineEnabled() ? 'paystack' : null,
+      publicKey: env.paystack.publicKey || null,
+    },
+  });
+};
 
-    const result = await query(`
-      SELECT p.*, u.name as customer_name, u.email as customer_email,
-             s.name as service_name, a.appointment_date
-      FROM payments p
-      JOIN users u ON p.customer_id = u.id
-      LEFT JOIN appointments a ON p.appointment_id = a.id
-      LEFT JOIN services s ON a.service_id = s.id
-      ${where}
-      ORDER BY p.created_at DESC
-      LIMIT $${idx} OFFSET $${idx + 1}
-    `, params);
+exports.getPayments = asyncHandler(async (req, res) => {
+  const { status, method, from, to, search, page, limit } = req.query;
+  const filter = {};
 
-    res.json({
-      success: true,
-      data: result.rows,
-      pagination: { page, limit, total: parseInt(countRes.rows[0].count), pages: Math.ceil(countRes.rows[0].count / limit) },
+  if (!isAdmin(req.user)) filter.customer = req.user._id;
+  else if (req.query.customer && mongoose.isValidObjectId(req.query.customer)) filter.customer = req.query.customer;
+
+  if (status && Payment.STATUSES.includes(status)) filter.status = status;
+  if (method && Payment.METHODS.includes(method)) filter.method = method;
+  if (from || to) {
+    filter.createdAt = {};
+    if (from) filter.createdAt.$gte = new Date(`${from}T00:00:00Z`);
+    if (to) filter.createdAt.$lte = new Date(`${to}T23:59:59Z`);
+  }
+  if (search && isAdmin(req.user)) {
+    const regex = searchRegex(search);
+    const customers = await User.find({ $or: [{ name: regex }, { email: regex }] }).select('_id').limit(200);
+    filter.$or = [{ reference: regex }, { receiptNumber: regex }, { customer: { $in: customers.map((c) => c._id) } }];
+  }
+
+  const { items, pagination } = await paginate(Payment, filter, { page, limit, populate: LIST_POPULATE });
+
+  let summary;
+  if (isAdmin(req.user)) {
+    const rows = await Payment.aggregate([{ $group: { _id: '$status', total: { $sum: '$amount' }, count: { $sum: 1 } } }]);
+    const of = (key) => rows.find((row) => row._id === key) || { total: 0, count: 0 };
+    summary = {
+      collected: of('success').total,
+      outstanding: of('pending').total,
+      refunded: of('refunded').total,
+      pendingCount: of('pending').count,
+    };
+  }
+  res.json({ success: true, data: items, pagination, summary });
+});
+
+exports.getPayment = asyncHandler(async (req, res) => {
+  res.json({ success: true, data: await findAccessible(req.params.id, req.user) });
+});
+
+/** Customer: start an online payment for one of their appointments. */
+exports.initializePayment = asyncHandler(async (req, res) => {
+  const appointment = await Appointment.findOne({ _id: req.body.appointmentId, customer: req.user._id });
+  if (!appointment) throw AppError.notFound('Appointment');
+  if (!Appointment.ACTIVE_STATUSES.includes(appointment.status)) {
+    throw AppError.badRequest('This appointment is no longer active');
+  }
+  const payment = await Payment.findOne({ appointment: appointment._id });
+  if (!payment) throw AppError.notFound('Payment');
+
+  const checkout = await paymentService.initializeOnlinePayment(payment, req.user);
+  appointment.paymentMethod = 'paystack';
+  await appointment.save();
+  res.json({ success: true, data: checkout });
+});
+
+/** Customer: called from the checkout return page to confirm the transaction. */
+exports.verifyPayment = asyncHandler(async (req, res) => {
+  const existing = await Payment.findOne({ providerReference: req.body.reference });
+  if (!existing) throw AppError.notFound('Payment');
+  if (!isAdmin(req.user) && String(existing.customer) !== req.user.id) throw AppError.notFound('Payment');
+
+  const payment = await paymentService.verifyOnlinePayment(req.body.reference);
+  res.json({ success: true, message: 'Payment verified', data: payment });
+});
+
+/**
+ * Paystack webhook (server to server). Guarantees the payment is recorded even
+ * if the customer closes the browser before returning to the site.
+ * Mounted with express.raw so the signature is checked against the exact bytes.
+ */
+exports.paystackWebhook = asyncHandler(async (req, res) => {
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from('');
+  if (!paymentService.isValidWebhookSignature(rawBody, req.headers['x-paystack-signature'])) {
+    return res.status(401).json({ success: false, message: 'Invalid signature' });
+  }
+  const event = JSON.parse(rawBody.toString('utf8'));
+  if (event.event === 'charge.success' && event.data && event.data.reference) {
+    // Re-verify with Paystack rather than trusting the payload.
+    await paymentService.verifyOnlinePayment(event.data.reference).catch((error) => {
+      console.error('[paystack] webhook settlement failed:', error.message);
     });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
   }
+  res.sendStatus(200);
+});
+
+/** Admin: record a payment taken at the salon (cash, POS or transfer). */
+exports.markPaid = asyncHandler(async (req, res) => {
+  const payment = await findAccessible(req.params.id, req.user);
+  if (payment.status === 'success') throw AppError.conflict('This payment has already been recorded');
+  if (payment.status === 'refunded') throw AppError.badRequest('A refunded payment cannot be marked as paid');
+  if (['cancelled', 'rejected'].includes(payment.appointment.status)) {
+    throw AppError.badRequest('Cannot take payment for a cancelled appointment');
+  }
+  const settled = await paymentService.settlePayment(payment._id, {
+    method: req.body.method || (payment.method === 'paystack' ? 'cash' : payment.method),
+    recordedBy: req.user._id,
+    note: req.body.note,
+  });
+  res.json({ success: true, message: 'Payment recorded', data: settled });
+});
+
+/** Admin: mark a successful payment as refunded (the money is returned outside the system). */
+exports.refundPayment = asyncHandler(async (req, res) => {
+  const payment = await findAccessible(req.params.id, req.user);
+  if (payment.status !== 'success') throw AppError.badRequest('Only successful payments can be refunded');
+
+  payment.status = 'refunded';
+  payment.refundedAt = new Date();
+  if (req.body.note) payment.note = req.body.note;
+  await payment.save();
+  await Appointment.findByIdAndUpdate(payment.appointment._id, { paymentStatus: 'refunded' });
+  res.json({ success: true, message: 'Payment marked as refunded', data: payment });
+});
+
+exports.deletePayment = asyncHandler(async (req, res) => {
+  const payment = await findAccessible(req.params.id, req.user);
+  if (payment.status === 'success') throw AppError.badRequest('Successful payments are financial records and cannot be deleted');
+  await payment.deleteOne();
+  res.json({ success: true, message: 'Payment deleted' });
+});
+
+const sendPdf = (res, buffer, filename) => {
+  res.set({
+    'Content-Type': 'application/pdf',
+    'Content-Disposition': `attachment; filename="${filename}"`,
+    'Content-Length': buffer.length,
+  });
+  res.send(buffer);
 };
 
-exports.initializePayment = async (req, res) => {
-  try {
-    const { appointment_id, method } = req.body;
-    const apptRes = await query(`
-      SELECT a.*, s.name as service_name, s.price FROM appointments a
-      JOIN services s ON a.service_id = s.id
-      WHERE a.id = $1 AND a.customer_id = $2
-    `, [appointment_id, req.user.id]);
-
-    if (!apptRes.rows[0]) return res.status(404).json({ success: false, message: 'Appointment not found' });
-    const appt = apptRes.rows[0];
-    const reference = generateReference();
-
-    if (method === 'paystack') {
-      const data = await paymentService.initializePaystack(req.user.email, appt.price, {
-        appointment_id, reference, customer_name: req.user.name,
-      });
-      await query(
-        'INSERT INTO payments (appointment_id, customer_id, amount, method, reference) VALUES ($1,$2,$3,$4,$5)',
-        [appointment_id, req.user.id, appt.price, 'paystack', reference]
-      );
-      return res.json({ success: true, data: { authorization_url: data.data.authorization_url, reference } });
-    }
-
-    if (method === 'flutterwave') {
-      await query(
-        'INSERT INTO payments (appointment_id, customer_id, amount, method, reference) VALUES ($1,$2,$3,$4,$5)',
-        [appointment_id, req.user.id, appt.price, 'flutterwave', reference]
-      );
-      return res.json({ success: true, data: { reference, amount: appt.price, email: req.user.email } });
-    }
-
-    res.status(400).json({ success: false, message: 'Invalid payment method' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+exports.downloadReceipt = asyncHandler(async (req, res) => {
+  const payment = await findAccessible(req.params.id, req.user);
+  if (!['success', 'refunded'].includes(payment.status) || !payment.receiptNumber) {
+    throw AppError.badRequest('A receipt is only available after payment has been received');
   }
-};
+  const pdf = await pdfService.generatePaymentDocument(payment, await Setting.getMain(), 'receipt');
+  sendPdf(res, pdf, `receipt-${payment.receiptNumber}.pdf`);
+});
 
-exports.verifyPayment = async (req, res) => {
-  try {
-    const { reference, method, transaction_id } = req.body;
-
-    let verified = false;
-    let transId = null;
-
-    if (method === 'paystack') {
-      const data = await paymentService.verifyPaystack(reference);
-      verified = data.data?.status === 'success';
-      transId = data.data?.id;
-    } else if (method === 'flutterwave') {
-      const data = await paymentService.verifyFlutterwave(transaction_id);
-      verified = data.data?.status === 'successful';
-      transId = data.data?.id;
-    }
-
-    if (!verified) return res.status(400).json({ success: false, message: 'Payment verification failed' });
-
-    const payRes = await query(`
-      UPDATE payments SET status='success', transaction_id=$1 WHERE reference=$2 RETURNING *
-    `, [transId, reference]);
-
-    if (!payRes.rows[0]) return res.status(404).json({ success: false, message: 'Payment record not found' });
-
-    await query(
-      'UPDATE appointments SET payment_status=$1, status=$2 WHERE id=$3',
-      ['paid', 'confirmed', payRes.rows[0].appointment_id]
-    );
-
-    // Update customer stats
-    await query(`
-      UPDATE customers SET total_visits = total_visits + 1, total_spent = total_spent + $1
-      WHERE user_id = $2
-    `, [payRes.rows[0].amount, req.user.id]);
-
-    // Send receipt email
-    const apptRes = await query(`
-      SELECT a.*, s.name as service_name FROM appointments a
-      JOIN services s ON a.service_id = s.id WHERE a.id = $1
-    `, [payRes.rows[0].appointment_id]);
-
-    await emailService.sendPaymentReceipt(req.user.email, req.user.name, {
-      reference,
-      service_name: apptRes.rows[0]?.service_name,
-      amount: payRes.rows[0].amount,
-      method,
-      date: new Date().toLocaleDateString(),
-    });
-
-    res.json({ success: true, data: payRes.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
-
-exports.downloadReceipt = async (req, res) => {
-  try {
-    const result = await query(`
-      SELECT p.*, u.name as customer_name, s.name as service_name
-      FROM payments p
-      JOIN users u ON p.customer_id = u.id
-      LEFT JOIN appointments a ON p.appointment_id = a.id
-      LEFT JOIN services s ON a.service_id = s.id
-      WHERE p.id = $1
-    `, [req.params.id]);
-
-    if (!result.rows[0]) return res.status(404).json({ success: false, message: 'Payment not found' });
-    if (req.user.role !== 'admin' && result.rows[0].customer_id !== req.user.id) {
-      return res.status(403).json({ success: false, message: 'Access denied' });
-    }
-
-    const pdf = await pdfService.generateReceipt(result.rows[0]);
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename=receipt-${result.rows[0].reference}.pdf`);
-    res.send(pdf);
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+exports.downloadInvoice = asyncHandler(async (req, res) => {
+  const payment = await findAccessible(req.params.id, req.user);
+  const pdf = await pdfService.generatePaymentDocument(payment, await Setting.getMain(), 'invoice');
+  sendPdf(res, pdf, `invoice-${payment.reference}.pdf`);
+});

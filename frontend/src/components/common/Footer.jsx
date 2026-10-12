@@ -1,67 +1,107 @@
 import { Link } from 'react-router-dom';
-import { FaFacebook, FaInstagram, FaTwitter, FaWhatsapp } from 'react-icons/fa';
-import { HiLocationMarker, HiPhone, HiMail, HiClock } from 'react-icons/hi';
+import { FaFacebookF, FaInstagram, FaTiktok, FaWhatsapp } from 'react-icons/fa';
+import { FaXTwitter } from 'react-icons/fa6';
+import { HiOutlineLocationMarker, HiOutlineMail, HiOutlinePhone } from 'react-icons/hi';
+import { useSettings } from '../../context/SettingsContext';
+import { DAYS, formatTime } from '../../utils/helpers';
+import Logo from './Logo';
 
-const Footer = () => (
-  <footer className="bg-gray-900 text-gray-300">
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10">
-        {/* Brand */}
+const SOCIAL_ICONS = { facebook: FaFacebookF, instagram: FaInstagram, twitter: FaXTwitter, tiktok: FaTiktok, whatsapp: FaWhatsapp };
+
+const QUICK_LINKS = [
+  { to: '/services', label: 'Services' },
+  { to: '/stylists', label: 'Our Stylists' },
+  { to: '/pricing', label: 'Pricing' },
+  { to: '/gallery', label: 'Gallery' },
+  { to: '/reviews', label: 'Reviews' },
+  { to: '/book', label: 'Book Appointment' },
+];
+
+/** Site footer: about, quick links, contact details, hours and social links. */
+const Footer = () => {
+  const { settings } = useSettings();
+  const socials = Object.entries(settings.socialLinks || {}).filter(([key, url]) => url && SOCIAL_ICONS[key]);
+
+  return (
+    <footer className="bg-salon-dark text-gray-300">
+      <div className="container-page py-14 grid gap-10 sm:grid-cols-2 lg:grid-cols-4">
         <div>
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-8 h-8 bg-gold-500 rounded-full flex items-center justify-center">
-              <span className="text-white font-bold text-sm">A</span>
+          <Logo light />
+          <p className="mt-4 text-sm text-gray-400 leading-relaxed">{settings.tagline}</p>
+          {socials.length > 0 && (
+            <div className="flex gap-2 mt-5">
+              {socials.map(([key, url]) => {
+                const Icon = SOCIAL_ICONS[key];
+                return (
+                  <a
+                    key={key}
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-label={key}
+                    className="w-9 h-9 rounded-full bg-white/10 hover:bg-gold-500 flex items-center justify-center transition-colors"
+                  >
+                    <Icon className="w-4 h-4" />
+                  </a>
+                );
+              })}
             </div>
-            <span className="font-serif font-bold text-xl text-white">Aisha's Salon</span>
-          </div>
-          <p className="text-sm leading-relaxed text-gray-400">
-            Lagos's premier luxury salon experience. We bring beauty, confidence, and elegance to every client.
-          </p>
-          <div className="flex gap-3 mt-5">
-            {[FaFacebook, FaInstagram, FaTwitter, FaWhatsapp].map((Icon, i) => (
-              <a key={i} href="#" className="w-9 h-9 bg-gray-800 hover:bg-gold-500 rounded-full flex items-center justify-center transition-colors">
-                <Icon className="w-4 h-4" />
-              </a>
-            ))}
-          </div>
+          )}
         </div>
 
-        {/* Quick Links */}
         <div>
-          <h4 className="text-white font-semibold mb-4">Quick Links</h4>
+          <p className="font-semibold text-white mb-4">Quick Links</p>
           <ul className="space-y-2 text-sm">
-            {[['/', 'Home'], ['/about', 'About Us'], ['/services', 'Services'], ['/stylists', 'Our Stylists'], ['/gallery', 'Gallery'], ['/book', 'Book Appointment']].map(([to, label]) => (
+            {QUICK_LINKS.map(({ to, label }) => (
               <li key={to}><Link to={to} className="hover:text-gold-400 transition-colors">{label}</Link></li>
             ))}
           </ul>
         </div>
 
-        {/* Services */}
         <div>
-          <h4 className="text-white font-semibold mb-4">Our Services</h4>
-          <ul className="space-y-2 text-sm">
-            {['Hair Styling', 'Braiding', 'Facials', 'Spa & Massage', 'Makeup', 'Pedicure & Nails'].map(s => (
-              <li key={s}><Link to="/services" className="hover:text-gold-400 transition-colors">{s}</Link></li>
-            ))}
+          <p className="font-semibold text-white mb-4">Contact</p>
+          <ul className="space-y-3 text-sm">
+            {settings.address && (
+              <li className="flex gap-2"><HiOutlineLocationMarker className="w-5 h-5 text-gold-500 shrink-0" />{settings.address}</li>
+            )}
+            {settings.phone && (
+              <li className="flex gap-2">
+                <HiOutlinePhone className="w-5 h-5 text-gold-500 shrink-0" />
+                <a href={`tel:${settings.phone.replace(/\s/g, '')}`} className="hover:text-gold-400">{settings.phone}</a>
+              </li>
+            )}
+            {settings.email && (
+              <li className="flex gap-2">
+                <HiOutlineMail className="w-5 h-5 text-gold-500 shrink-0" />
+                <a href={`mailto:${settings.email}`} className="hover:text-gold-400 break-all">{settings.email}</a>
+              </li>
+            )}
           </ul>
         </div>
 
-        {/* Contact */}
         <div>
-          <h4 className="text-white font-semibold mb-4">Contact Us</h4>
-          <ul className="space-y-3 text-sm">
-            <li className="flex items-start gap-2"><HiLocationMarker className="w-4 h-4 text-gold-500 mt-0.5 shrink-0" /><span>15 Victoria Island, Lagos, Nigeria</span></li>
-            <li className="flex items-center gap-2"><HiPhone className="w-4 h-4 text-gold-500 shrink-0" /><a href="tel:+2348012345678" className="hover:text-gold-400">+234 801 234 5678</a></li>
-            <li className="flex items-center gap-2"><HiMail className="w-4 h-4 text-gold-500 shrink-0" /><a href="mailto:info@aishasalon.com" className="hover:text-gold-400">info@aishasalon.com</a></li>
-            <li className="flex items-start gap-2"><HiClock className="w-4 h-4 text-gold-500 mt-0.5 shrink-0" /><span>Mon–Sat: 9:00 AM – 7:00 PM<br />Sunday: Closed</span></li>
+          <p className="font-semibold text-white mb-4">Opening Hours</p>
+          <ul className="space-y-1.5 text-sm">
+            {settings.openingHours.map((hours) => (
+              <li key={hours.day} className="flex justify-between gap-4">
+                <span>{DAYS[hours.day]}</span>
+                <span className={hours.isOpen ? 'text-gray-400' : 'text-red-400'}>
+                  {hours.isOpen ? `${formatTime(hours.open)} - ${formatTime(hours.close)}` : 'Closed'}
+                </span>
+              </li>
+            ))}
           </ul>
         </div>
       </div>
-    </div>
-    <div className="border-t border-gray-800 py-6 text-center text-sm text-gray-500">
-      <p>© {new Date().getFullYear()} Aisha's Salon. All rights reserved. Built with ❤️ in Lagos.</p>
-    </div>
-  </footer>
-);
+
+      <div className="border-t border-white/10">
+        <div className="container-page py-5 text-xs text-gray-500 flex flex-col sm:flex-row justify-between gap-2">
+          <p>&copy; {new Date().getFullYear()} {settings.businessName}. All rights reserved.</p>
+          <p>E-Salon Platform for Online Booking and Business Management</p>
+        </div>
+      </div>
+    </footer>
+  );
+};
 
 export default Footer;

@@ -1,98 +1,138 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { HiX } from 'react-icons/hi';
-import { galleryService } from '../../services/index';
-import { Spinner } from '../../components/ui/Skeleton';
+import { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
+import { HiChevronLeft, HiChevronRight, HiOutlinePhotograph, HiX } from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import { galleryService } from '../../services';
+import { mediaUrl } from '../../services/api';
+import { cleanParams } from '../../utils/helpers';
+import PageHero from '../../components/common/PageHero';
+import SmartImage from '../../components/ui/SmartImage';
+import EmptyState from '../../components/ui/EmptyState';
+import { Skeleton } from '../../components/ui/Skeleton';
 
-const CATEGORIES = ['all', 'hair', 'braids', 'facials', 'spa', 'makeup', 'pedicure'];
+const CATEGORIES = ['Hair', 'Braids', 'Facials', 'Spa', 'Makeup', 'Pedicure'];
 
+/** Photo gallery filtered by category, with a keyboard-friendly lightbox. */
 const Gallery = () => {
-  const [images, setImages] = useState([]);
-  const [filtered, setFiltered] = useState([]);
-  const [active, setActive] = useState('all');
-  const [loading, setLoading] = useState(true);
-  const [lightbox, setLightbox] = useState(null);
+  const [category, setCategory] = useState('');
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const { data, loading } = useFetch(() => galleryService.getAll(cleanParams({ category, limit: 60 })), [category]);
 
+  const items = data?.data || [];
+  const active = items[activeIndex];
+
+  // Arrow keys and Escape control the lightbox.
   useEffect(() => {
-    galleryService.getAll().then(({ data }) => {
-      setImages(data.data || []);
-      setFiltered(data.data || []);
-    }).finally(() => setLoading(false));
-  }, []);
-
-  const filter = (cat) => {
-    setActive(cat);
-    setFiltered(cat === 'all' ? images : images.filter(img => img.category === cat));
-  };
+    if (activeIndex < 0) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') setActiveIndex(-1);
+      if (event.key === 'ArrowRight') setActiveIndex((index) => (index + 1) % items.length);
+      if (event.key === 'ArrowLeft') setActiveIndex((index) => (index - 1 + items.length) % items.length);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [activeIndex, items.length]);
 
   return (
-    <div className="min-h-screen bg-salon-bg">
-      <div className="bg-gradient-to-r from-gray-900 to-gray-800 py-20">
-        <div className="max-w-7xl mx-auto px-4 text-center">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-            <h1 className="text-4xl md:text-5xl font-serif font-bold text-white mb-4">Our Gallery</h1>
-            <p className="text-gray-300 text-lg">A showcase of our finest work</p>
-          </motion.div>
-        </div>
-      </div>
+    <>
+      <PageHero eyebrow="Our work" title="Gallery" subtitle="Browse recent looks and treatments from our stylists." />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        {/* Filter tabs */}
-        <div className="flex flex-wrap justify-center gap-2 mb-10">
-          {CATEGORIES.map(cat => (
-            <button key={cat} onClick={() => filter(cat)}
-              className={`px-5 py-2 rounded-full text-sm font-medium capitalize transition-all duration-200 ${active === cat ? 'bg-gold-500 text-white shadow-md' : 'bg-white text-gray-600 hover:bg-gold-50 hover:text-gold-600 shadow-sm'}`}>
-              {cat}
+      <section className="container-page py-10">
+        <div className="flex gap-2 overflow-x-auto scrollbar-hide pb-6 justify-start md:justify-center" role="tablist" aria-label="Gallery categories">
+          {['', ...CATEGORIES].map((item) => (
+            <button
+              key={item || 'all'}
+              type="button"
+              role="tab"
+              aria-selected={category === item}
+              onClick={() => setCategory(item)}
+              className={`tab ${category === item ? 'tab-active' : 'bg-white shadow-sm'}`}
+            >
+              {item || 'All'}
             </button>
           ))}
         </div>
 
         {loading ? (
-          <div className="flex justify-center py-20"><Spinner size="lg" /></div>
-        ) : filtered.length === 0 ? (
-          <p className="text-center text-gray-400 py-20">No images in this category yet</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="aspect-square" />)}
+          </div>
+        ) : items.length === 0 ? (
+          <EmptyState icon={HiOutlinePhotograph} title="No photos in this category yet" message="Please check back soon." />
         ) : (
-          <motion.div layout className="columns-1 sm:columns-2 lg:columns-3 xl:columns-4 gap-4 space-y-4">
-            <AnimatePresence>
-              {filtered.map((img, i) => (
-                <motion.div key={img.id} layout initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
-                  transition={{ delay: i * 0.03 }}
-                  className="break-inside-avoid cursor-pointer group relative overflow-hidden rounded-2xl shadow-card hover:shadow-card-hover transition-shadow"
-                  onClick={() => setLightbox(img)}
+          <motion.div layout className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            <AnimatePresence mode="popLayout">
+              {items.map((item, index) => (
+                <motion.button
+                  key={item.id}
+                  type="button"
+                  layout
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  transition={{ duration: 0.25 }}
+                  onClick={() => setActiveIndex(index)}
+                  className="group relative rounded-2xl overflow-hidden shadow-card text-left"
+                  aria-label={`Open ${item.title || item.category}`}
                 >
-                  <img src={img.image_url} alt={img.title || img.category} className="w-full object-cover group-hover:scale-105 transition-transform duration-300" />
-                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors duration-300 flex items-end">
-                    <div className="p-3 translate-y-full group-hover:translate-y-0 transition-transform duration-300">
-                      <span className="text-white text-sm font-medium capitalize bg-gold-500/80 px-2 py-0.5 rounded-full">{img.category}</span>
-                    </div>
-                  </div>
-                </motion.div>
+                  <SmartImage src={item.image} alt={item.title || item.category} className="aspect-square" imgClassName="group-hover:scale-110 !transition-all !duration-500" />
+                  <span className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent px-3 pt-10 pb-3 text-white">
+                    <span className="block text-sm font-medium">{item.title || item.category}</span>
+                    <span className="block text-xs text-white/70">{item.category}</span>
+                  </span>
+                </motion.button>
               ))}
             </AnimatePresence>
           </motion.div>
         )}
-      </div>
+      </section>
 
-      {/* Lightbox */}
       <AnimatePresence>
-        {lightbox && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"
-            onClick={() => setLightbox(null)}
+        {active && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-label={active.title || active.category}
+            onClick={() => setActiveIndex(-1)}
           >
-            <button className="absolute top-4 right-4 text-white p-2 hover:bg-white/10 rounded-full">
-              <HiX className="w-6 h-6" />
+            <button type="button" className="absolute top-4 right-4 text-white/80 hover:text-white p-2" aria-label="Close" onClick={() => setActiveIndex(-1)}>
+              <HiX className="w-7 h-7" />
             </button>
-            <motion.img
-              initial={{ scale: 0.8 }} animate={{ scale: 1 }} exit={{ scale: 0.8 }}
-              src={lightbox.image_url} alt={lightbox.title}
-              className="max-w-full max-h-[90vh] object-contain rounded-xl"
-              onClick={e => e.stopPropagation()}
-            />
+            {items.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  aria-label="Previous image"
+                  className="absolute left-2 sm:left-6 text-white/80 hover:text-white p-2"
+                  onClick={(event) => { event.stopPropagation(); setActiveIndex((activeIndex - 1 + items.length) % items.length); }}
+                >
+                  <HiChevronLeft className="w-9 h-9" />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Next image"
+                  className="absolute right-2 sm:right-6 text-white/80 hover:text-white p-2"
+                  onClick={(event) => { event.stopPropagation(); setActiveIndex((activeIndex + 1) % items.length); }}
+                >
+                  <HiChevronRight className="w-9 h-9" />
+                </button>
+              </>
+            )}
+            <motion.figure key={active.id} initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="max-w-4xl w-full" onClick={(event) => event.stopPropagation()}>
+              <img src={mediaUrl(active.image)} alt={active.title || active.category} className="max-h-[78vh] w-full object-contain rounded-xl" />
+              <figcaption className="text-center text-white mt-4">
+                <span className="font-medium">{active.title || active.category}</span>
+                <span className="text-white/60"> · {active.category} · {activeIndex + 1} of {items.length}</span>
+              </figcaption>
+            </motion.figure>
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
+    </>
   );
 };
 

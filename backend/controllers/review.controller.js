@@ -1,90 +1,109 @@
-const { query } = require('../config/database');
-const { paginate } = require('../utils/helpers');
+/**
+ * Reviews: customers review completed appointments; admins moderate and reply.
+ */
+const { Review, Appointment } = require('../models');
+const AppError = require('../utils/AppError');
+const { asyncHandler, paginate } = require('../utils/helpers');
+const notifications = require('../services/notification.service');
 
-exports.getReviews = async (req, res) => {
-  try {
-    const { page, limit, offset } = paginate(req.query.page, req.query.limit);
-    const { service_id, employee_id, approved } = req.query;
-    let conditions = [];
-    let params = [];
-    let idx = 1;
+const POPULATE = [
+  { path: 'customer', select: 'name avatar' },
+  { path: 'service', select: 'name' },
+  { path: 'employee', select: 'name' },
+];
 
-    if (service_id) { conditions.push(`r.service_id = $${idx++}`); params.push(service_id); }
-    if (employee_id) { conditions.push(`r.employee_id = $${idx++}`); params.push(employee_id); }
-    if (approved !== undefined) { conditions.push(`r.is_approved = $${idx++}`); params.push(approved === 'true'); }
-    else if (req.user?.role !== 'admin') { conditions.push(`r.is_approved = true`); }
+exports.getReviews = asyncHandler(async (req, res) => {
+  const { status, rating, employee, mine, page, limit } = req.query;
+  const isAdmin = req.user && req.user.role === 'admin';
+  const filter = {};
 
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const countRes = await query(`SELECT COUNT(*) FROM reviews r ${where}`, params);
-    params.push(limit, offset);
+  if (mine === 'true' && req.user) filter.customer = req.user._id;
+  else if (!isAdmin) filter.isApproved = true;
+  else if (status === 'approved') filter.isApproved = true;
+  else if (status === 'pending') filter.isApproved = false;
 
-    const result = await query(`
-      SELECT r.*, u.name as customer_name, u.avatar as customer_avatar,
-             s.name as service_name, eu.name as stylist_name
-      FROM reviews r
-      JOIN users u ON r.customer_id = u.id
-      LEFT JOIN services s ON r.service_id = s.id
-      LEFT JOIN employees e ON r.employee_id = e.id
-      LEFT JOIN users eu ON e.user_id = eu.id
-      ${where}
-      ORDER BY r.created_at DESC
-      LIMIT $${idx} OFFSET $${idx + 1}
-    `, params);
+  if (Number(rating) >= 1 && Number(rating) <= 5) filter.rating = Number(rating);
+  if (employee) filter.employee = employee;
 
-    res.json({
-      success: true,
-      data: result.rows,
-      pagination: { page, limit, total: parseInt(countRes.rows[0].count), pages: Math.ceil(countRes.rows[0].count / limit) },
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  // sort=top puts the highest-rated (then most recent) reviews first, e.g. for the home page.
+  const sort = req.query.sort === 'top' ? '-rating -createdAt' : '-createdAt';
+  const { items, pagination } = await paginate(Review, filter, { page, limit, sort, populate: POPULATE });
+
+  // Public rating summary (approved reviews only).
+  const [stats] = await Review.aggregate([
+    { $match: { isApproved: true } },
+    { $group: { _id: null, average: { $avg: '$rating' }, count: { $sum: 1 } } },
+  ]);
+  const distribution = await Review.aggregate([
+    { $match: { isApproved: true } },
+    { $group: { _id: '$rating', count: { $sum: 1 } } },
+  ]);
+
+  res.json({
+    success: true,
+    data: items,
+    pagination,
+    summary: {
+      average: stats ? Math.round(stats.average * 10) / 10 : 0,
+      count: stats ? stats.count : 0,
+      distribution: [5, 4, 3, 2, 1].map((star) => ({
+        rating: star,
+        count: (distribution.find((row) => row._id === star) || { count: 0 }).count,
+      })),
+    },
+  });
+});
+
+exports.createReview = asyncHandler(async (req, res) => {
+  const { appointmentId, rating, comment } = req.body;
+  const appointment = await Appointment.findOne({ _id: appointmentId, customer: req.user._id });
+  if (!appointment) throw AppError.notFound('Appointment');
+  if (appointment.status !== 'completed') throw AppError.badRequest('You can only review completed appointments');
+  if (await Review.exists({ appointment: appointment._id })) {
+    throw AppError.conflict('You have already reviewed this appointment');
   }
-};
 
-exports.createReview = async (req, res) => {
-  try {
-    const { appointment_id, rating, comment } = req.body;
+  const review = await Review.create({
+    customer: req.user._id,
+    appointment: appointment._id,
+    service: appointment.service,
+    employee: appointment.employee,
+    rating,
+    comment,
+  });
+  notifications.dispatch(notifications.onReviewSubmitted(req.user, review));
+  res.status(201).json({
+    success: true,
+    message: 'Thank you! Your review will appear once it has been approved.',
+    data: await review.populate(POPULATE),
+  });
+});
 
-    const apptRes = await query(
-      "SELECT * FROM appointments WHERE id=$1 AND customer_id=$2 AND status='completed'",
-      [appointment_id, req.user.id]
-    );
-    if (!apptRes.rows[0]) {
-      return res.status(400).json({ success: false, message: 'Can only review completed appointments' });
-    }
+/** Admin: approve / hide a review and optionally reply to it. */
+exports.updateReview = asyncHandler(async (req, res) => {
+  const review = await Review.findById(req.params.id);
+  if (!review) throw AppError.notFound('Review');
 
-    const existing = await query('SELECT id FROM reviews WHERE appointment_id=$1', [appointment_id]);
-    if (existing.rows[0]) return res.status(400).json({ success: false, message: 'Already reviewed this appointment' });
+  if (req.body.isApproved !== undefined) review.isApproved = Boolean(req.body.isApproved);
+  if (req.body.reply !== undefined) review.reply = req.body.reply;
+  await review.save();
+  await Review.refreshEmployeeRating(review.employee);
 
-    const appt = apptRes.rows[0];
-    const result = await query(`
-      INSERT INTO reviews (customer_id, employee_id, service_id, appointment_id, rating, comment)
-      VALUES ($1,$2,$3,$4,$5,$6) RETURNING *
-    `, [req.user.id, appt.employee_id, appt.service_id, appointment_id, rating, comment]);
-
-    res.status(201).json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  if (req.body.isApproved === true) {
+    notifications.dispatch(notifications.notifyUser(review.customer, {
+      type: 'review', title: 'Your review was published', message: 'Thank you for sharing your experience.', link: '/reviews',
+    }));
   }
-};
+  res.json({ success: true, message: 'Review updated', data: await review.populate(POPULATE) });
+});
 
-exports.approveReview = async (req, res) => {
-  try {
-    const result = await query(
-      'UPDATE reviews SET is_approved = NOT is_approved WHERE id = $1 RETURNING *',
-      [req.params.id]
-    );
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+/** Admins can delete any review; customers only their own. */
+exports.deleteReview = asyncHandler(async (req, res) => {
+  const review = await Review.findById(req.params.id);
+  if (!review) throw AppError.notFound('Review');
+  if (req.user.role !== 'admin' && String(review.customer) !== req.user.id) throw AppError.notFound('Review');
 
-exports.deleteReview = async (req, res) => {
-  try {
-    await query('DELETE FROM reviews WHERE id = $1', [req.params.id]);
-    res.json({ success: true, message: 'Review deleted' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+  await review.deleteOne();
+  await Review.refreshEmployeeRating(review.employee);
+  res.json({ success: true, message: 'Review deleted' });
+});

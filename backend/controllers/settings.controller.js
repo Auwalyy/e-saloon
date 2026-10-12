@@ -1,33 +1,47 @@
-const { query } = require('../config/database');
+/**
+ * Salon settings: public business information and admin updates.
+ */
+const { Setting } = require('../models');
+const AppError = require('../utils/AppError');
+const { asyncHandler, pick } = require('../utils/helpers');
+const mediaService = require('../services/media.service');
 
-exports.getSettings = async (req, res) => {
-  try {
-    const result = await query('SELECT key, value FROM settings');
-    const settings = {};
-    result.rows.forEach(({ key, value }) => { settings[key] = value; });
-    res.json({ success: true, data: settings });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+const FIELDS = [
+  'businessName', 'tagline', 'about', 'address', 'email', 'phone',
+  'slotIntervalMinutes', 'cancellationWindowHours',
+];
+const SOCIALS = ['facebook', 'instagram', 'twitter', 'tiktok', 'whatsapp'];
 
-exports.updateSettings = async (req, res) => {
-  try {
-    const updates = req.body; // { key: value, ... }
-    for (const [key, value] of Object.entries(updates)) {
-      await query(
-        'INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=$2',
-        [key, value]
-      );
-    }
-    if (req.file) {
-      await query(
-        'INSERT INTO settings (key, value) VALUES ($1,$2) ON CONFLICT (key) DO UPDATE SET value=$2',
-        ['salon_logo', req.file.path]
-      );
-    }
-    res.json({ success: true, message: 'Settings updated' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+exports.getSettings = asyncHandler(async (req, res) => {
+  res.json({ success: true, data: await Setting.getMain() });
+});
+
+exports.updateSettings = asyncHandler(async (req, res) => {
+  const settings = await Setting.getMain();
+  settings.set(pick(req.body, FIELDS));
+
+  if (req.body.socialLinks && typeof req.body.socialLinks === 'object') {
+    SOCIALS.forEach((key) => {
+      if (req.body.socialLinks[key] !== undefined) settings.socialLinks[key] = req.body.socialLinks[key];
+    });
   }
-};
+
+  if (Array.isArray(req.body.openingHours)) {
+    settings.openingHours = settings.openingHours.map((current) => {
+      const given = req.body.openingHours.find((h) => Number(h.day) === current.day);
+      if (!given) return current;
+      const next = {
+        day: current.day,
+        isOpen: Boolean(given.isOpen),
+        open: given.open || current.open,
+        close: given.close || current.close,
+      };
+      if (next.isOpen && next.open >= next.close) throw AppError.badRequest('Closing time must be after opening time');
+      return next;
+    });
+  }
+
+  if (req.file) settings.logo = await mediaService.replaceImage(req.file, settings.logo, req.user.id);
+  await settings.save();
+  res.json({ success: true, message: 'Settings saved', data: settings });
+});

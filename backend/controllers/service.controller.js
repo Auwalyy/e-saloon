@@ -1,110 +1,116 @@
-const { query } = require('../config/database');
-const { paginate } = require('../utils/helpers');
+/**
+ * Salon services: public catalogue (search, filter, sort) and admin CRUD.
+ */
+const mongoose = require('mongoose');
+const { Service, Category, Appointment, Employee } = require('../models');
+const AppError = require('../utils/AppError');
+const { asyncHandler, paginate, searchRegex, pick } = require('../utils/helpers');
+const mediaService = require('../services/media.service');
 
-exports.getServices = async (req, res) => {
-  try {
-    const { page, limit, offset } = paginate(req.query.page, req.query.limit);
-    const { category_id, search, sort = 'created_at', order = 'DESC', featured } = req.query;
-
-    let conditions = ['s.is_active = true'];
-    let params = [];
-    let idx = 1;
-
-    if (category_id) { conditions.push(`s.category_id = $${idx++}`); params.push(category_id); }
-    if (search) { conditions.push(`(s.name ILIKE $${idx} OR s.description ILIKE $${idx})`); params.push(`%${search}%`); idx++; }
-    if (featured === 'true') { conditions.push(`s.is_featured = true`); }
-
-    const where = `WHERE ${conditions.join(' AND ')}`;
-    const validSorts = { name: 's.name', price: 's.price', duration: 's.duration', created_at: 's.created_at' };
-    const sortCol = validSorts[sort] || 's.created_at';
-
-    const countRes = await query(`SELECT COUNT(*) FROM services s ${where}`, params);
-    params.push(limit, offset);
-
-    const result = await query(`
-      SELECT s.*, c.name as category_name,
-             COALESCE(AVG(r.rating), 0) as avg_rating,
-             COUNT(DISTINCT r.id) as review_count
-      FROM services s
-      LEFT JOIN categories c ON s.category_id = c.id
-      LEFT JOIN reviews r ON r.service_id = s.id AND r.is_approved = true
-      ${where}
-      GROUP BY s.id, c.name
-      ORDER BY ${sortCol} ${order === 'ASC' ? 'ASC' : 'DESC'}
-      LIMIT $${idx} OFFSET $${idx + 1}
-    `, params);
-
-    res.json({
-      success: true,
-      data: result.rows,
-      pagination: { page, limit, total: parseInt(countRes.rows[0].count), pages: Math.ceil(countRes.rows[0].count / limit) },
-    });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
+const SORTS = {
+  newest: '-createdAt',
+  name: 'name',
+  price_asc: 'price',
+  price_desc: '-price',
+  duration_asc: 'duration',
+  duration_desc: '-duration',
 };
+const FIELDS = ['name', 'description', 'category', 'price', 'duration', 'isActive', 'isFeatured'];
 
-exports.getService = async (req, res) => {
-  try {
-    const result = await query(`
-      SELECT s.*, c.name as category_name,
-             COALESCE(AVG(r.rating), 0) as avg_rating,
-             COUNT(DISTINCT r.id) as review_count
-      FROM services s
-      LEFT JOIN categories c ON s.category_id = c.id
-      LEFT JOIN reviews r ON r.service_id = s.id AND r.is_approved = true
-      WHERE s.id = $1
-      GROUP BY s.id, c.name
-    `, [req.params.id]);
-    if (!result.rows[0]) return res.status(404).json({ success: false, message: 'Service not found' });
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+exports.getServices = asyncHandler(async (req, res) => {
+  const { search, category, featured, status, minPrice, maxPrice, sort, page, limit = 12 } = req.query;
+  const isAdmin = req.user && req.user.role === 'admin';
+  const filter = {};
 
-exports.createService = async (req, res) => {
-  try {
-    const { name, description, category_id, price, duration, is_featured } = req.body;
-    const image = req.file?.path || null;
-    const result = await query(`
-      INSERT INTO services (name, description, category_id, price, duration, image, is_featured)
-      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *
-    `, [name, description, category_id, price, duration, image, is_featured || false]);
-    res.status(201).json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+  // The public only ever sees active services; admins can filter by status.
+  if (!isAdmin) filter.isActive = true;
+  else if (status === 'active') filter.isActive = true;
+  else if (status === 'inactive') filter.isActive = false;
 
-exports.updateService = async (req, res) => {
-  try {
-    const { name, description, category_id, price, duration, is_active, is_featured } = req.body;
-    const image = req.file?.path;
-    const result = await query(`
-      UPDATE services SET
-        name = COALESCE($1, name),
-        description = COALESCE($2, description),
-        category_id = COALESCE($3, category_id),
-        price = COALESCE($4, price),
-        duration = COALESCE($5, duration),
-        image = COALESCE($6, image),
-        is_active = COALESCE($7, is_active),
-        is_featured = COALESCE($8, is_featured)
-      WHERE id = $9 RETURNING *
-    `, [name, description, category_id, price, duration, image, is_active, is_featured, req.params.id]);
-    if (!result.rows[0]) return res.status(404).json({ success: false, message: 'Service not found' });
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  if (search) filter.$or = [{ name: searchRegex(search) }, { description: searchRegex(search) }];
+  if (category) {
+    if (mongoose.isValidObjectId(category)) filter.category = category;
+    else {
+      const found = await Category.findOne({ slug: category }).select('_id');
+      filter.category = found ? found._id : null;
+    }
   }
-};
+  if (featured === 'true') filter.isFeatured = true;
+  if (minPrice || maxPrice) {
+    filter.price = {};
+    if (Number(minPrice) >= 0 && minPrice !== undefined && minPrice !== '') filter.price.$gte = Number(minPrice);
+    if (Number(maxPrice) > 0) filter.price.$lte = Number(maxPrice);
+    if (!Object.keys(filter.price).length) delete filter.price;
+  }
 
-exports.deleteService = async (req, res) => {
-  try {
-    await query('UPDATE services SET is_active = false WHERE id = $1', [req.params.id]);
-    res.json({ success: true, message: 'Service deactivated' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+  const { items, pagination } = await paginate(Service, filter, {
+    page, limit, sort: SORTS[sort] || SORTS.name, populate: { path: 'category', select: 'name slug' },
+  });
+  res.json({ success: true, data: items, pagination });
+});
+
+/** Most booked active services (used on the home page). */
+exports.getPopularServices = asyncHandler(async (req, res) => {
+  const limit = Math.min(12, parseInt(req.query.limit, 10) || 6);
+  const ranked = await Appointment.aggregate([
+    { $match: { status: { $in: ['pending', 'confirmed', 'completed'] } } },
+    { $group: { _id: '$service', bookings: { $sum: 1 } } },
+    { $sort: { bookings: -1 } },
+    { $limit: 30 },
+  ]);
+  const order = new Map(ranked.map((row, index) => [String(row._id), index]));
+
+  const services = await Service.find({ isActive: true }).populate('category', 'name slug');
+  services.sort((a, b) => {
+    const rankA = order.has(a.id) ? order.get(a.id) : Infinity;
+    const rankB = order.has(b.id) ? order.get(b.id) : Infinity;
+    if (rankA !== rankB) return rankA - rankB;
+    return Number(b.isFeatured) - Number(a.isFeatured);
+  });
+  res.json({ success: true, data: services.slice(0, limit) });
+});
+
+exports.getService = asyncHandler(async (req, res) => {
+  const service = await Service.findById(req.params.id).populate('category', 'name slug');
+  const isAdmin = req.user && req.user.role === 'admin';
+  if (!service || (!service.isActive && !isAdmin)) throw AppError.notFound('Service');
+  res.json({ success: true, data: service });
+});
+
+exports.createService = asyncHandler(async (req, res) => {
+  const data = pick(req.body, FIELDS);
+  if (!data.category) delete data.category;
+  data.image = (await mediaService.saveImage(req.file, req.user.id)) || req.body.imageUrl || '';
+  const service = await Service.create(data);
+  res.status(201).json({ success: true, message: 'Service created', data: await service.populate('category', 'name slug') });
+});
+
+exports.updateService = asyncHandler(async (req, res) => {
+  const service = await Service.findById(req.params.id);
+  if (!service) throw AppError.notFound('Service');
+
+  const data = pick(req.body, FIELDS);
+  if (data.category === '') data.category = null;
+  service.set(data);
+  if (req.file) service.image = await mediaService.replaceImage(req.file, service.image, req.user.id);
+  await service.save();
+  res.json({ success: true, message: 'Service updated', data: await service.populate('category', 'name slug') });
+});
+
+exports.deleteService = asyncHandler(async (req, res) => {
+  const service = await Service.findById(req.params.id);
+  if (!service) throw AppError.notFound('Service');
+
+  // Services with booking history are archived rather than destroyed, to keep records intact.
+  if (await Appointment.exists({ service: service._id })) {
+    service.isActive = false;
+    await service.save();
+    return res.json({ success: true, message: 'Service has bookings, so it was deactivated instead of deleted', data: service });
   }
-};
+  await Promise.all([
+    mediaService.removeImage(service.image),
+    Employee.updateMany({ services: service._id }, { $pull: { services: service._id } }),
+    service.deleteOne(),
+  ]);
+  res.json({ success: true, message: 'Service deleted' });
+});

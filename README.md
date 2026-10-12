@@ -1,427 +1,309 @@
-# Aisha's Salon — E-Salon Platform
+# E-Salon Platform for Online Booking and Business Management
 
-> Design and Implementation of an E-Salon Platform for Online Booking and Business Management
+**Case study: Aisha's Salon**
 
-A full-stack, production-ready salon management system built for Aisha's Salon, Lagos. Customers can book appointments online; admins manage every aspect of the business digitally.
+A full-stack web application that lets customers book salon appointments online and lets the salon owner run the whole business digitally. It replaces the paper appointment book, manual customer records and manual payment tracking.
+
+It consists of two applications that share one API:
+
+| Application | Who uses it | What it does |
+|---|---|---|
+| **Customer website** | Customers and visitors | Browse services, stylists, prices and the gallery; book, reschedule and cancel appointments; pay; download receipts; leave reviews |
+| **Admin dashboard** | Salon owner / staff | Manage appointments, customers, employees, services, categories, payments, inventory, reviews, gallery, reports and settings |
 
 ---
 
-## Tech Stack
+## Contents
+
+1. [Features](#features)
+2. [Technology stack](#technology-stack)
+3. [Project structure](#project-structure)
+4. [Installation guide](#installation-guide)
+5. [Environment variables](#environment-variables)
+6. [Demo accounts](#demo-accounts)
+7. [Available scripts](#available-scripts)
+8. [How the key parts work](#how-the-key-parts-work)
+9. [Security](#security)
+10. [Design decisions and scope notes](#design-decisions-and-scope-notes)
+11. [Further documentation](#further-documentation)
+
+---
+
+## Features
+
+### Customer website
+
+- **Pages:** Home, About, Services, Gallery, Stylists, Pricing, Book Appointment, My Bookings, Reviews, Contact, Login, Register, Forgot Password, Reset Password, Profile, Settings.
+- **Home:** hero, popular services, featured stylists, why choose us, customer reviews, gallery, working hours, FAQs, call to action, footer.
+- **Services:** cards with image, name, description, duration, price and a Book button, with search, category and price filters, sorting and pagination.
+- **Gallery:** Hair, Braids, Facials, Spa, Makeup and Pedicure categories with a lightbox.
+- **Stylists:** photo, experience, specialisation, working days, rating and a Book button.
+- **Booking wizard:** Service → Stylist → Date → Time slot → Payment method → Confirmation. Only dates with free slots can be picked, and unavailable times are disabled.
+- **Account:** edit profile, upload a photo, change password, appointment history, payments, download receipts and invoices, cancel and reschedule appointments, leave reviews, notification preferences.
+
+### Admin dashboard
+
+- **Overview:** today's, weekly and monthly revenue, outstanding payments, total customers, employees and bookings, pending / completed / cancelled counts, plus charts for revenue, booking statistics, bookings per month, customer growth and popular services.
+- **Appointments:** view, search, filter, approve, reject, cancel, reschedule, assign another stylist, mark completed or no-show, delete, and book on behalf of a customer.
+- **Customers:** list, search, booking history, spending history, deactivate / reactivate, add walk-in customers.
+- **Employees:** add, edit, delete, upload a photo, assign services, working days and hours, view weekly schedules.
+- **Services and categories:** full CRUD with images and active / inactive status.
+- **Payments:** payment ID, customer, amount, method, status and date; record payments; refunds; PDF invoices and receipts.
+- **Inventory:** products, stock levels, suppliers, low-stock alerts, purchases, sales and adjustments with a full movement history.
+- **Reviews:** approve, hide, reply and delete.
+- **Reports:** daily, weekly, monthly and annual, exportable to PDF and Excel.
+- **Settings:** business name, logo, address, email, phone, opening hours, social links, booking rules and the contact-form inbox.
+
+### Automation
+
+- Confirmation email, receipt and admin notification after every booking.
+- Emails for registration, booking confirmation, status changes, reminders (about 24 hours before), cancellation, password reset and payment receipts.
+- Dashboard notifications for customers and admins, with an SMS-ready gateway layer.
+
+---
+
+## Technology stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | React 18, Vite, Tailwind CSS, Framer Motion |
-| Backend | Node.js, Express.js |
-| Database | PostgreSQL |
-| Auth | JWT + bcrypt |
-| Storage | Cloudinary |
-| Payments | Paystack + Flutterwave |
-| Email | Nodemailer (Gmail SMTP) |
-| PDF | PDFKit |
-| Excel | SheetJS (xlsx) |
-| Charts | Recharts |
+| Frontend | React 18, Vite, Tailwind CSS, React Router, React Hook Form, Axios, Framer Motion, React Icons, Recharts |
+| Backend | Node.js, Express |
+| Database | MongoDB with Mongoose |
+| Authentication | JWT, bcrypt |
+| Image storage | MongoDB (binary documents served by the API) |
+| Email | Nodemailer |
+| Documents | PDFKit (receipts, invoices, reports), ExcelJS (Excel export) |
+| Payments | Pay at salon (cash, POS, bank transfer); optional online payment with Paystack |
+| Deployment | Frontend on Vercel, backend on Railway, database on MongoDB Atlas |
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 e-saloon/
 ├── backend/
-│   ├── config/          # DB, Cloudinary, Email config
-│   ├── controllers/     # Route handlers
-│   ├── database/        # Migrations & seed data
-│   ├── middleware/       # Auth, error, upload, validate
-│   ├── routes/          # Express routers
-│   ├── services/        # Email, payment, PDF, notifications
-│   ├── utils/           # Helpers
-│   ├── validators/      # express-validator rules
-│   ├── app.js
-│   ├── server.js
-│   └── .env.example
-└── frontend/
-    ├── src/
-    │   ├── components/  # UI, admin, common components
-    │   ├── context/     # AuthContext
-    │   ├── hooks/       # useFetch, usePagination
-    │   ├── layouts/     # CustomerLayout, AdminLayout
-    │   ├── pages/       # auth/, customer/, admin/
-    │   ├── routes/      # ProtectedRoute, GuestRoute
-    │   ├── services/    # Axios API layer
-    │   ├── utils/       # helpers.js
-    │   ├── App.jsx
-    │   └── main.jsx
-    └── .env.example
+│   ├── app.js                 Express app: security, parsing, routes, errors
+│   ├── server.js              Entry point: database, HTTP server, background jobs
+│   ├── config/                Environment, database and email configuration
+│   ├── controllers/           Request handlers (one file per resource)
+│   ├── routes/                URL-to-controller mapping
+│   ├── middleware/            Auth, validation, sanitising, uploads, error handling
+│   ├── models/                Mongoose schemas (the data model)
+│   ├── services/              Business logic: slots, payments, email, PDF, reports
+│   ├── validators/            Input validation rules
+│   ├── utils/                 Helpers: errors, time and timezone maths
+│   ├── database/              migrate.js (indexes) and seed.js (demo data)
+│   └── scripts/               dev-memory.js (run without installing MongoDB)
+├── frontend/
+│   └── src/
+│       ├── components/        ui/ (generic), common/ (website), admin/ (dashboard)
+│       ├── pages/             customer/, auth/ and admin/ pages
+│       ├── layouts/           CustomerLayout, AuthLayout, AdminLayout
+│       ├── context/           AuthContext, SettingsContext
+│       ├── hooks/             useFetch, useDebounce, useDocuments
+│       ├── services/          Axios client and one API object per resource
+│       ├── routes/            ProtectedRoute, GuestRoute
+│       └── utils/             Formatting and validation helpers
+└── docs/                      API reference, database design, diagrams, deployment
 ```
+
+The backend follows the **MVC pattern** with a service layer: routes → validators → controllers → services → models.
 
 ---
 
-## Installation Guide
+## Installation guide
 
-### Prerequisites
-- Node.js >= 18
-- PostgreSQL >= 14
-- Cloudinary account
-- Paystack account
-- Gmail account (for SMTP)
+### Requirements
 
-### 1. Clone & Install
+- Node.js 18 or newer
+- MongoDB 6 or newer (local, or a free MongoDB Atlas cluster). *Not needed for the quick start below.*
+
+### Quick start (no database to install)
+
+This runs the API against an in-memory MongoDB that is loaded with demo data on every start. It is the fastest way to see the system working. **Data is lost when the server stops.**
 
 ```bash
-# Backend
+# Terminal 1: API on http://localhost:5000
 cd backend
 npm install
+npm run dev:memory
 
-# Frontend
-cd ../frontend
-npm install
-```
-
-### 2. Configure Environment Variables
-
-```bash
-# Backend
-cp .env.example .env
-# Edit .env with your credentials
-
-# Frontend
-cp .env.example .env
-# Edit .env with your keys
-```
-
-### 3. Setup Database
-
-```bash
-cd backend
-
-# Run migrations (creates all tables)
-npm run migrate
-
-# Seed initial data (admin user, categories, services, employees)
-npm run seed
-```
-
-### 4. Run Development Servers
-
-```bash
-# Backend (port 5000)
-cd backend
-npm run dev
-
-# Frontend (port 5173)
+# Terminal 2: website on http://localhost:5173
 cd frontend
+npm install
 npm run dev
 ```
 
-### 5. Access the Application
+Open <http://localhost:5173> and sign in with one of the [demo accounts](#demo-accounts).
 
-| URL | Description |
-|---|---|
-| http://localhost:5173 | Customer Website |
-| http://localhost:5173/admin | Admin Dashboard |
-| http://localhost:5000/api/health | API Health Check |
+> The first run downloads a MongoDB binary (about 80 MB), so it can take a few minutes.
 
-### Default Admin Credentials
+### Normal setup (persistent database)
+
+```bash
+# 1. Backend
+cd backend
+npm install
+cp .env.example .env          # then edit .env (see below)
+npm run migrate               # create collections, indexes and the admin account
+npm run seed                  # optional: load demo data
+npm run dev                   # API on http://localhost:5000
+
+# 2. Frontend (second terminal)
+cd frontend
+npm install
+cp .env.example .env
+npm run dev                   # website on http://localhost:5173
 ```
-Email:    admin@aishasalon.com
-Password: Admin@123456
-```
+
+On Windows PowerShell use `Copy-Item .env.example .env` instead of `cp`.
 
 ---
 
-## API Documentation
+## Environment variables
 
-### Base URL
-```
-http://localhost:5000/api
-```
+### Backend (`backend/.env`)
 
-### Authentication
-All protected routes require:
-```
-Authorization: Bearer <token>
-```
-
-### Endpoints
-
-#### Auth
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| POST | /auth/register | No | Register new customer |
-| POST | /auth/login | No | Login |
-| POST | /auth/logout | No | Logout |
-| GET | /auth/me | Yes | Get current user |
-| PUT | /auth/profile | Yes | Update profile |
-| PUT | /auth/change-password | Yes | Change password |
-| PUT | /auth/avatar | Yes | Upload avatar |
-| POST | /auth/forgot-password | No | Request reset link |
-| POST | /auth/reset-password | No | Reset password |
-
-#### Appointments
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | /appointments | Yes | List appointments |
-| GET | /appointments/:id | Yes | Get appointment |
-| POST | /appointments | Yes | Create appointment |
-| PUT | /appointments/:id | Yes | Update appointment |
-| DELETE | /appointments/:id | Admin | Delete appointment |
-| GET | /appointments/slots | Yes | Get available time slots |
-
-#### Services
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | /services | No | List services |
-| GET | /services/:id | No | Get service |
-| POST | /services | Admin | Create service |
-| PUT | /services/:id | Admin | Update service |
-| DELETE | /services/:id | Admin | Deactivate service |
-
-#### Employees
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | /employees | No | List employees |
-| GET | /employees/:id | No | Get employee |
-| GET | /employees/by-service/:serviceId | No | Employees for a service |
-| POST | /employees | Admin | Add employee |
-| PUT | /employees/:id | Admin | Update employee |
-| DELETE | /employees/:id | Admin | Deactivate employee |
-| PUT | /employees/:id/availability | Admin | Update availability |
-
-#### Payments
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| GET | /payments | Yes | List payments |
-| POST | /payments/initialize | Yes | Initialize payment |
-| POST | /payments/verify | Yes | Verify payment |
-| GET | /payments/:id/receipt | Yes | Download PDF receipt |
-
-#### Reports (Admin only)
-| Method | Endpoint | Description |
+| Variable | Required | Description |
 |---|---|---|
-| GET | /reports?type=monthly | Get report data |
-| GET | /reports/export/pdf | Export PDF report |
-| GET | /reports/export/excel | Export Excel report |
+| `NODE_ENV` | No | `development` or `production` |
+| `PORT` | No | API port (default `5000`) |
+| `MONGODB_URI` | Yes in production | MongoDB connection string |
+| `USE_MEMORY_DB` | No | `true` runs on an in-memory database with demo data |
+| `JWT_SECRET` | Yes in production | Random string of at least 32 characters used to sign tokens |
+| `JWT_EXPIRES_IN` | No | Token lifetime (default `7d`) |
+| `JWT_COOKIE_EXPIRES` | No | Cookie lifetime in days (default `7`) |
+| `FRONTEND_URL` | Yes in production | Allowed browser origin(s), comma separated. The first is used in email links |
+| `ADMIN_NAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD` | No | The first administrator, created when none exists |
+| `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASS`, `EMAIL_FROM` | No | SMTP settings. When blank, emails are logged to the console instead of sent |
+| `PAYSTACK_SECRET_KEY`, `PAYSTACK_PUBLIC_KEY` | No | Enables online card payment. When blank, only pay-at-salon methods are offered |
+| `SALON_TIMEZONE` | No | Default `Africa/Lagos` |
+| `SMS_PROVIDER` | No | Default `console` (logs messages) |
 
----
-
-## Database Schema (ER Diagram)
-
-```
-users (id, name, email, phone, password, role, avatar, is_active)
-  │
-  ├──< customers (id, user_id, gender, total_visits, total_spent)
-  │
-  ├──< employees (id, user_id, specialization, experience_years, bio)
-  │       │
-  │       ├──< availability (id, employee_id, day_of_week, start_time, end_time)
-  │       └──< employee_services (employee_id, service_id)
-  │
-  ├──< appointments (id, customer_id, employee_id, service_id, date, time, status)
-  │       │
-  │       └──< payments (id, appointment_id, customer_id, amount, method, status)
-  │
-  ├──< reviews (id, customer_id, employee_id, service_id, appointment_id, rating)
-  └──< notifications (id, user_id, title, message, is_read)
-
-categories (id, name, description, image)
-  └──< services (id, category_id, name, price, duration, image, is_featured)
-
-gallery (id, title, image_url, category, is_featured)
-inventory (id, name, quantity, reorder_level, supplier)
-  └──< inventory_transactions (id, inventory_id, type, quantity)
-settings (id, key, value)
-password_reset_tokens (id, user_id, token, expires_at, used)
-```
-
----
-
-## Use Case Diagram
-
-```
-                    ┌─────────────────────────────────┐
-                    │         E-Salon System           │
-                    │                                  │
-  ┌──────────┐      │  ○ Register / Login              │
-  │ Customer │─────▶│  ○ Browse Services               │
-  └──────────┘      │  ○ Book Appointment              │
-                    │  ○ Choose Stylist & Time Slot    │
-                    │  ○ Make Payment (Paystack/FLW)   │
-                    │  ○ View My Bookings              │
-                    │  ○ Cancel / Reschedule           │
-                    │  ○ Leave Review                  │
-                    │  ○ Download Receipt              │
-                    │  ○ Edit Profile                  │
-                    │                                  │
-  ┌──────────┐      │  ○ View Dashboard Analytics      │
-  │  Admin   │─────▶│  ○ Manage Appointments           │
-  └──────────┘      │  ○ Manage Services & Categories  │
-                    │  ○ Manage Employees              │
-                    │  ○ Manage Customers              │
-                    │  ○ Manage Payments               │
-                    │  ○ Manage Inventory              │
-                    │  ○ Moderate Reviews              │
-                    │  ○ Manage Gallery                │
-                    │  ○ Generate Reports (PDF/Excel)  │
-                    │  ○ Configure Settings            │
-                    └─────────────────────────────────┘
-```
-
----
-
-## Sequence Diagram — Booking Flow
-
-```
-Customer        Frontend         Backend          DB           Email
-   │                │                │             │              │
-   │──Book Now─────▶│                │             │              │
-   │                │──GET /services▶│──SELECT────▶│              │
-   │                │◀──services─────│◀────────────│              │
-   │──Select Svc───▶│                │             │              │
-   │                │──GET /employees/by-service──▶│              │
-   │                │◀──stylists─────│◀────────────│              │
-   │──Select Stylist▶│               │             │              │
-   │                │──GET /slots────▶│──CHECK─────▶│              │
-   │                │◀──slots────────│◀────────────│              │
-   │──Select Slot──▶│                │             │              │
-   │──Select Payment▶│               │             │              │
-   │──Confirm───────▶│               │             │              │
-   │                │──POST /appointments──────────▶│              │
-   │                │                │──INSERT─────▶│              │
-   │                │                │──POST /payments/initialize  │
-   │                │◀──payment_url──│             │              │
-   │──Pay───────────▶[Paystack]      │             │              │
-   │                │──POST /payments/verify───────▶│              │
-   │                │                │──UPDATE─────▶│              │
-   │                │                │──────────────────────────▶Email
-   │◀──Confirmed────│                │             │              │
-```
-
----
-
-## Class Diagram
-
-```
-User
-  - id: UUID
-  - name: string
-  - email: string
-  - role: enum(customer|admin|employee)
-  + login()
-  + register()
-  + updateProfile()
-
-Appointment
-  - id: UUID
-  - customer_id: UUID
-  - employee_id: UUID
-  - service_id: UUID
-  - appointment_date: Date
-  - start_time: Time
-  - status: enum
-  + create()
-  + cancel()
-  + reschedule()
-  + complete()
-
-Payment
-  - id: UUID
-  - appointment_id: UUID
-  - amount: Decimal
-  - method: enum
-  - status: enum
-  + initialize()
-  + verify()
-  + generateReceipt()
-
-Service
-  - id: UUID
-  - name: string
-  - price: Decimal
-  - duration: Integer
-  + getAvailableSlots()
-
-Employee
-  - id: UUID
-  - specialization: string
-  - experience_years: Integer
-  + getAvailability()
-  + updateAvailability()
-```
-
----
-
-## Deployment Guide
-
-### Frontend → Vercel
+Generate a JWT secret with:
 
 ```bash
-cd frontend
-npm run build
-
-# Deploy to Vercel
-npx vercel --prod
-
-# Set environment variables in Vercel dashboard:
-# VITE_API_URL=https://your-backend.railway.app/api
-# VITE_PAYSTACK_PUBLIC_KEY=pk_live_...
+node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 ```
 
-### Backend → Railway
+### Frontend (`frontend/.env`)
 
-1. Push code to GitHub
-2. Connect repo to Railway
-3. Set environment variables in Railway dashboard (copy from .env.example)
-4. Railway auto-deploys on push
-
-### Database → Railway PostgreSQL
-
-1. Add PostgreSQL plugin in Railway
-2. Copy DATABASE_URL to backend env vars
-3. Run migrations: `npm run migrate`
-4. Run seed: `npm run seed`
+| Variable | Description |
+|---|---|
+| `VITE_API_URL` | API base URL. Keep `/api` in development (Vite proxies it to port 5000). In production set it to the deployed API, for example `https://your-api.up.railway.app/api` |
 
 ---
 
-## Security Features
+## Demo accounts
 
-- JWT authentication with HTTP-only cookies
-- bcrypt password hashing (12 rounds)
-- Rate limiting (100 req/15min general, 10 req/15min auth)
-- Helmet.js security headers
-- XSS protection (xss-clean)
-- CORS configured for frontend origin only
-- Input validation (express-validator)
-- Role-based access control (customer / admin / employee)
-- Secure cookie flags in production
+Created by `npm run seed` and by `npm run dev:memory`.
 
----
+| Role | Email | Password |
+|---|---|---|
+| Administrator | `admin@aishasalon.com` | `Admin@123456` |
+| Customer | `aisha@example.com` (and nine others) | `Customer@123` |
 
-## Features Summary
-
-### Customer Website
-- Home page with hero, services, stylists, reviews, FAQs
-- Services page with search, filter, sort
-- Gallery with category filter and lightbox
-- Stylists page with ratings
-- Multi-step booking wizard (service → stylist → date/time → payment → confirm)
-- My Bookings with cancel, review, receipt download
-- Profile with avatar upload and password change
-- About, Pricing, Reviews, Contact pages
-
-### Admin Dashboard
-- Analytics dashboard with 8 KPI cards and 4 charts
-- Full appointment management (approve/reject/complete/cancel)
-- Service & category CRUD with image upload
-- Employee management with availability scheduling
-- Customer management with status toggle
-- Payment tracking with PDF receipt download
-- Review moderation (approve/reject)
-- Gallery management
-- Inventory with stock tracking and low-stock alerts
-- Reports with PDF and Excel export
-- Salon settings configuration
+**Change the admin password before going live**, or set `ADMIN_EMAIL` and `ADMIN_PASSWORD` before the first start.
 
 ---
 
-*Built for Aisha's Salon — University Final Year Project*
-*Stack: React + Node.js + PostgreSQL + Tailwind CSS*
+## Available scripts
+
+### Backend
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start the API with auto-reload |
+| `npm start` | Start the API (production) |
+| `npm run dev:memory` | Start the API on an in-memory database with demo data |
+| `npm run migrate` | Create collections, synchronise indexes, create the admin account |
+| `npm run seed` | Load demo data into an empty database |
+| `npm run seed -- --fresh` | **Erase all data**, then load demo data |
+
+### Frontend
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start the development server |
+| `npm run build` | Build for production into `dist/` |
+| `npm run preview` | Serve the production build locally |
+
+---
+
+## How the key parts work
+
+### Preventing double booking
+
+Time is divided into 15-minute blocks. When an appointment is booked, one `BookedSlot` document is inserted for each block it covers, and the collection has a **unique index on (employee, date, block)**. If two customers try to take overlapping times at the same instant, MongoDB accepts one insert and rejects the other, so exactly one booking succeeds and the other customer is asked to choose another time. No transactions or locks are needed.
+
+Slots are released when an appointment is cancelled, rejected, marked no-show or moved.
+
+### Availability
+
+A time is offered only when the salon is open, the stylist works that day, the whole service fits inside both sets of hours, the time is not in the past and none of its blocks is taken. The API returns every slot with an `available` flag, and the calendar only enables dates that still have at least one free slot.
+
+### Appointment lifecycle
+
+```
+pending ──approve──▶ confirmed ──▶ completed
+   │                     │
+   ├──reject──▶ rejected  ├──▶ no_show
+   └──cancel──▶ cancelled └──▶ cancelled
+```
+
+Customers can cancel or reschedule online until a configurable number of hours before the start time (default 2).
+
+### Payments
+
+Every booking creates one payment record. It is settled either at the salon (an administrator records cash, POS or transfer) or online through Paystack. When a payment is recorded, a numbered PDF receipt is generated and emailed. Paying online confirms the appointment automatically.
+
+### Images
+
+Uploaded images (JPEG, PNG, WebP or GIF, up to 3 MB) are stored in MongoDB and served from `GET /api/media/:id`, so no external storage account is required.
+
+---
+
+## Security
+
+| Measure | Implementation |
+|---|---|
+| Password hashing | bcrypt, 12 rounds |
+| Authentication | JWT, sent as a Bearer token and set as an httpOnly, Secure, SameSite cookie |
+| Role-based authorisation | `protect` and `authorize('admin')` middleware; customers can only read their own bookings, payments and receipts |
+| CSRF protection | Bearer tokens are not sent automatically by browsers. Cookie-authenticated requests that change data must also send an `X-CSRF-Token` header that matches a claim signed inside the JWT |
+| HTTP headers | Helmet |
+| Rate limiting | 600 requests per 15 minutes per IP overall, 20 on credential endpoints, 5 per hour on the contact form |
+| Input validation | express-validator on every write endpoint, plus Mongoose schema validation |
+| XSS protection | HTML is stripped from all incoming strings; React escapes output |
+| NoSQL injection | Keys starting with `$` or containing `.` are removed from input; search text is escaped before use in a regular expression |
+| CORS | Only origins listed in `FRONTEND_URL` are allowed |
+| Password reset | Random single-use token, stored only as a SHA-256 hash, valid for 30 minutes |
+| Session invalidation | Tokens issued before a password change stop working |
+| Account enumeration | Login and forgot-password give the same response whether or not the email exists |
+| Uploads | File type and size are checked in the browser and again on the server |
+| Privilege escalation | The role is never accepted from client input |
+
+---
+
+## Design decisions and scope notes
+
+- **MongoDB instead of PostgreSQL.** The brief names MongoDB as the database, so the "tables" it lists are implemented as MongoDB collections. The mapping, and where it differs from a relational design, is documented in [docs/DATABASE.md](docs/DATABASE.md).
+- **Customers are users.** Customer profile fields live on the `users` collection (distinguished by `role`) instead of a separate `customers` collection, which avoids a lookup on every request.
+- **Availability is embedded.** A stylist's weekly working hours are stored on the employee document, and the salon's opening hours on the settings document.
+- **Image storage.** Images are stored in MongoDB as requested, not on Cloudinary. To move to Cloudinary later, only `backend/services/media.service.js` needs to change.
+- **Online payment is optional.** Paystack is implemented (initialise, verify, webhook). It stays switched off until keys are added, and has not been exercised against Paystack's live service. Flutterwave is not implemented.
+- **SMS is architecture only.** `backend/services/sms.service.js` defines the gateway interface and a console provider. Plug in a real provider (for example Termii or Twilio) to send texts.
+- **Refunds are a record.** Marking a payment as refunded updates the books; the money itself is returned outside the system.
+- **Reminders** are sent by an in-process scheduler, so the API must be running continuously (it is on Railway).
+
+---
+
+## Further documentation
+
+| Document | Contents |
+|---|---|
+| [docs/API.md](docs/API.md) | REST API reference |
+| [docs/DATABASE.md](docs/DATABASE.md) | Database design and ER diagram |
+| [docs/DIAGRAMS.md](docs/DIAGRAMS.md) | Use case, sequence, class and architecture diagrams |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deploying to MongoDB Atlas, Railway and Vercel |

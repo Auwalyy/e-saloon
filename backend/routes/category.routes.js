@@ -1,15 +1,19 @@
-const router = require('express').Router();
-const ctrl = require('../controllers/category.controller');
-const { protect, authorize } = require('../middleware/auth.middleware');
-const upload = require('../middleware/upload.middleware');
+/**
+ * Category routes: public list, admin CRUD.
+ */
+const express = require('express');
+const controller = require('../controllers/category.controller');
+const rules = require('../validators/catalog.validator');
+const { idParam } = require('../validators/common.validator');
+const validate = require('../middleware/validate.middleware');
+const { optionalAuth, adminOnly } = require('../middleware/auth.middleware');
+const { uploadImage } = require('../middleware/upload.middleware');
 
-router.get('/', ctrl.getCategories);
-router.post('/', protect, authorize('admin'),
-  (req, res, next) => { req.uploadFolder = 'categories'; next(); },
-  upload.single('image'), ctrl.createCategory);
-router.put('/:id', protect, authorize('admin'),
-  (req, res, next) => { req.uploadFolder = 'categories'; next(); },
-  upload.single('image'), ctrl.updateCategory);
-router.delete('/:id', protect, authorize('admin'), ctrl.deleteCategory);
+const router = express.Router();
+
+router.get('/', optionalAuth, controller.getCategories);
+router.post('/', adminOnly, uploadImage('image'), validate(rules.createCategory), controller.createCategory);
+router.put('/:id', adminOnly, uploadImage('image'), validate([...idParam, ...rules.updateCategory]), controller.updateCategory);
+router.delete('/:id', adminOnly, validate(idParam), controller.deleteCategory);
 
 module.exports = router;

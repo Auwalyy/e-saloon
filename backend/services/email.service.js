@@ -1,104 +1,169 @@
-const transporter = require('../config/email');
+/**
+ * Transactional emails.
+ * Every email shares one branded layout. Sending never throws, because a mail
+ * outage must not cause a booking or payment to fail.
+ */
+const env = require('../config/env');
+const { transporter, isConfigured } = require('../config/email');
+const { Setting } = require('../models');
+const { formatCurrency } = require('../utils/helpers');
 
-const from = process.env.EMAIL_FROM || "Aisha's Salon <noreply@aishasalon.com>";
+const escapeHtml = (value = '') =>
+  String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const send = (to, subject, html) =>
-  transporter.sendMail({ from, to, subject, html });
+const formatTime = (time) => {
+  const [hours, minutes] = time.split(':').map(Number);
+  return `${hours % 12 || 12}:${String(minutes).padStart(2, '0')} ${hours >= 12 ? 'PM' : 'AM'}`;
+};
 
-const baseTemplate = (content) => `
-<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>
-  body{font-family:Arial,sans-serif;background:#f8f8f8;margin:0;padding:0}
-  .container{max-width:600px;margin:40px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 4px 20px rgba(0,0,0,.08)}
-  .header{background:linear-gradient(135deg,#D4AF37,#b8960c);padding:32px;text-align:center}
-  .header h1{color:#fff;margin:0;font-size:24px;letter-spacing:1px}
-  .body{padding:32px}
-  .footer{background:#f8f8f8;padding:20px;text-align:center;font-size:12px;color:#999}
-  .btn{display:inline-block;background:#D4AF37;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:bold;margin:16px 0}
-  .info-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #f0f0f0}
-  .badge{display:inline-block;background:#D4AF37;color:#fff;padding:4px 12px;border-radius:20px;font-size:12px}
-</style></head><body>
-<div class="container">
-  <div class="header"><h1>✨ Aisha's Salon</h1></div>
-  <div class="body">${content}</div>
-  <div class="footer">© ${new Date().getFullYear()} Aisha's Salon. All rights reserved.<br>15 Victoria Island, Lagos, Nigeria</div>
-</div></body></html>`;
+const formatDate = (dateStr) =>
+  new Date(`${dateStr}T00:00:00Z`).toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC',
+  });
 
-exports.sendWelcomeEmail = (email, name) =>
-  send(email, "Welcome to Aisha's Salon! 🌟", baseTemplate(`
-    <h2>Welcome, ${name}! 🎉</h2>
-    <p>We're thrilled to have you join the Aisha's Salon family. Experience luxury beauty services at your fingertips.</p>
-    <p>You can now:</p>
-    <ul>
-      <li>Book appointments online 24/7</li>
-      <li>Choose your preferred stylist</li>
-      <li>Track your appointment history</li>
-      <li>Receive exclusive offers</li>
-    </ul>
-    <a href="${process.env.FRONTEND_URL}/services" class="btn">Book Your First Appointment</a>
-    <p>See you soon! 💛</p>
-  `));
+const layout = ({ businessName, heading, body, button }) => `<!doctype html>
+<html><body style="margin:0;background:#F8F8F8;font-family:Arial,Helvetica,sans-serif;color:#1a1a1a">
+<table width="100%" cellpadding="0" cellspacing="0" style="padding:32px 12px"><tr><td align="center">
+<table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden">
+  <tr><td style="background:#D4AF37;padding:24px 32px;color:#ffffff;font-size:22px;font-weight:bold">${escapeHtml(businessName)}</td></tr>
+  <tr><td style="padding:32px">
+    <h1 style="margin:0 0 16px;font-size:20px">${escapeHtml(heading)}</h1>
+    <div style="font-size:15px;line-height:1.6;color:#444444">${body}</div>
+    ${button ? `<p style="margin:28px 0 0"><a href="${button.url}" style="background:#D4AF37;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:10px;font-weight:bold;display:inline-block">${escapeHtml(button.label)}</a></p>` : ''}
+  </td></tr>
+  <tr><td style="padding:20px 32px;background:#fafafa;color:#999999;font-size:12px">This is an automated message from ${escapeHtml(businessName)}.</td></tr>
+</table></td></tr></table></body></html>`;
 
-exports.sendBookingConfirmation = (email, name, appointment) =>
-  send(email, "Appointment Confirmed! ✅", baseTemplate(`
-    <h2>Your Appointment is Confirmed! 🎊</h2>
-    <p>Hi ${name}, your booking has been confirmed. Here are your details:</p>
-    <div style="background:#fffbf0;border-left:4px solid #D4AF37;padding:16px;border-radius:8px;margin:16px 0">
-      <div class="info-row"><span><strong>Service:</strong></span><span>${appointment.service_name}</span></div>
-      <div class="info-row"><span><strong>Stylist:</strong></span><span>${appointment.stylist_name}</span></div>
-      <div class="info-row"><span><strong>Date:</strong></span><span>${appointment.date}</span></div>
-      <div class="info-row"><span><strong>Time:</strong></span><span>${appointment.time}</span></div>
-      <div class="info-row"><span><strong>Amount:</strong></span><span>₦${appointment.amount}</span></div>
-      <div class="info-row"><span><strong>Status:</strong></span><span><span class="badge">Confirmed</span></span></div>
-    </div>
-    <p>Please arrive 10 minutes early. If you need to reschedule, please do so at least 24 hours in advance.</p>
-    <a href="${process.env.FRONTEND_URL}/my-bookings" class="btn">View My Bookings</a>
-  `));
+const detailsTable = (rows) =>
+  `<table cellpadding="0" cellspacing="0" style="margin:16px 0;width:100%;border-collapse:collapse">${rows
+    .map(([label, value]) => `<tr>
+      <td style="padding:8px 0;color:#888888;border-bottom:1px solid #f0f0f0;width:40%">${escapeHtml(label)}</td>
+      <td style="padding:8px 0;border-bottom:1px solid #f0f0f0;font-weight:bold">${escapeHtml(value)}</td></tr>`)
+    .join('')}</table>`;
 
-exports.sendAppointmentReminder = (email, name, appointment) =>
-  send(email, "Appointment Reminder ⏰", baseTemplate(`
-    <h2>Reminder: Your Appointment is Tomorrow!</h2>
-    <p>Hi ${name}, just a friendly reminder about your upcoming appointment:</p>
-    <div style="background:#fffbf0;border-left:4px solid #D4AF37;padding:16px;border-radius:8px;margin:16px 0">
-      <div class="info-row"><span><strong>Service:</strong></span><span>${appointment.service_name}</span></div>
-      <div class="info-row"><span><strong>Date:</strong></span><span>${appointment.date}</span></div>
-      <div class="info-row"><span><strong>Time:</strong></span><span>${appointment.time}</span></div>
-    </div>
-    <p>We look forward to seeing you! 💛</p>
-  `));
+/** Low level send. Returns true when the message was handed to the transport. */
+const sendEmail = async ({ to, subject, heading, body, button, attachments }) => {
+  if (!to) return false;
+  try {
+    const settings = await Setting.getMain();
+    const info = await transporter.sendMail({
+      from: env.email.from,
+      to,
+      subject: `${subject} | ${settings.businessName}`,
+      html: layout({ businessName: settings.businessName, heading: heading || subject, body, button }),
+      attachments,
+    });
+    if (!isConfigured) console.log(`[email:dev] "${subject}" -> ${to} (SMTP not configured, message not sent)`);
+    return Boolean(info);
+  } catch (error) {
+    console.error(`[email] failed to send "${subject}" to ${to}:`, error.message);
+    return false;
+  }
+};
 
-exports.sendCancellationEmail = (email, name, appointment) =>
-  send(email, "Appointment Cancelled", baseTemplate(`
-    <h2>Appointment Cancelled</h2>
-    <p>Hi ${name}, your appointment has been cancelled.</p>
-    <div style="background:#fff5f5;border-left:4px solid #e53e3e;padding:16px;border-radius:8px;margin:16px 0">
-      <div class="info-row"><span><strong>Service:</strong></span><span>${appointment.service_name}</span></div>
-      <div class="info-row"><span><strong>Date:</strong></span><span>${appointment.date}</span></div>
-    </div>
-    <p>We hope to see you again soon. Book a new appointment anytime!</p>
-    <a href="${process.env.FRONTEND_URL}/book" class="btn">Book Again</a>
-  `));
+const appointmentRows = (appointment) => [
+  ['Reference', appointment.reference],
+  ['Service', appointment.service.name],
+  ['Stylist', appointment.employee.name],
+  ['Date', formatDate(appointment.date)],
+  ['Time', `${formatTime(appointment.startTime)} - ${formatTime(appointment.endTime)}`],
+  ['Price', formatCurrency(appointment.price)],
+];
 
-exports.sendPasswordResetEmail = (email, name, resetUrl) =>
-  send(email, "Reset Your Password 🔐", baseTemplate(`
-    <h2>Password Reset Request</h2>
-    <p>Hi ${name}, we received a request to reset your password.</p>
-    <p>Click the button below to reset it. This link expires in <strong>1 hour</strong>.</p>
-    <a href="${resetUrl}" class="btn">Reset Password</a>
-    <p style="color:#999;font-size:13px">If you didn't request this, please ignore this email. Your password will remain unchanged.</p>
-  `));
+const sendWelcomeEmail = (user) =>
+  sendEmail({
+    to: user.email,
+    subject: 'Welcome',
+    heading: `Welcome, ${user.name.split(' ')[0]}!`,
+    body: '<p>Your account has been created. You can now book appointments online, manage your bookings and download your receipts at any time.</p>',
+    button: { label: 'Book an appointment', url: `${env.frontendUrl}/book` },
+  });
 
-exports.sendPaymentReceipt = (email, name, payment) =>
-  send(email, "Payment Receipt 🧾", baseTemplate(`
-    <h2>Payment Successful! ✅</h2>
-    <p>Hi ${name}, your payment has been received. Here's your receipt:</p>
-    <div style="background:#fffbf0;border-left:4px solid #D4AF37;padding:16px;border-radius:8px;margin:16px 0">
-      <div class="info-row"><span><strong>Receipt #:</strong></span><span>${payment.reference}</span></div>
-      <div class="info-row"><span><strong>Service:</strong></span><span>${payment.service_name}</span></div>
-      <div class="info-row"><span><strong>Amount:</strong></span><span>₦${payment.amount}</span></div>
-      <div class="info-row"><span><strong>Method:</strong></span><span>${payment.method}</span></div>
-      <div class="info-row"><span><strong>Date:</strong></span><span>${payment.date}</span></div>
-      <div class="info-row"><span><strong>Status:</strong></span><span><span class="badge">Paid</span></span></div>
-    </div>
-    <a href="${process.env.FRONTEND_URL}/my-bookings" class="btn">View Booking</a>
-  `));
+const sendBookingConfirmation = (user, appointment) =>
+  sendEmail({
+    to: user.email,
+    subject: 'Booking received',
+    heading: 'Your booking has been received',
+    body: `<p>Hi ${escapeHtml(user.name.split(' ')[0])}, thank you for booking with us. Here are your appointment details:</p>${detailsTable(appointmentRows(appointment))}<p>We will notify you as soon as the salon confirms your appointment.</p>`,
+    button: { label: 'View my bookings', url: `${env.frontendUrl}/my-bookings` },
+  });
+
+const STATUS_COPY = {
+  confirmed: { subject: 'Appointment confirmed', text: 'Good news! Your appointment has been confirmed. We look forward to seeing you.' },
+  rejected: { subject: 'Appointment declined', text: 'Unfortunately we are unable to accommodate your appointment. Please book another time.' },
+  cancelled: { subject: 'Appointment cancelled', text: 'Your appointment has been cancelled.' },
+  completed: { subject: 'Thank you for visiting', text: 'Thank you for visiting us. We would love to hear about your experience. Please leave a review.' },
+  no_show: { subject: 'We missed you', text: 'We missed you at your appointment today. You are welcome to book again whenever you are ready.' },
+};
+
+const sendAppointmentStatusEmail = (user, appointment, reason) => {
+  const copy = STATUS_COPY[appointment.status];
+  if (!copy) return Promise.resolve(false);
+  const reasonHtml = reason ? `<p><strong>Reason:</strong> ${escapeHtml(reason)}</p>` : '';
+  return sendEmail({
+    to: user.email,
+    subject: copy.subject,
+    body: `<p>Hi ${escapeHtml(user.name.split(' ')[0])}, ${copy.text}</p>${reasonHtml}${detailsTable(appointmentRows(appointment))}`,
+    button: { label: 'View my bookings', url: `${env.frontendUrl}/my-bookings` },
+  });
+};
+
+const sendRescheduleEmail = (user, appointment) =>
+  sendEmail({
+    to: user.email,
+    subject: 'Appointment rescheduled',
+    body: `<p>Hi ${escapeHtml(user.name.split(' ')[0])}, your appointment has been moved. The new details are:</p>${detailsTable(appointmentRows(appointment))}`,
+    button: { label: 'View my bookings', url: `${env.frontendUrl}/my-bookings` },
+  });
+
+const sendAppointmentReminder = (user, appointment) =>
+  sendEmail({
+    to: user.email,
+    subject: 'Appointment reminder',
+    heading: 'Your appointment is coming up',
+    body: `<p>Hi ${escapeHtml(user.name.split(' ')[0])}, this is a friendly reminder of your upcoming appointment:</p>${detailsTable(appointmentRows(appointment))}<p>Please arrive 10 minutes early.</p>`,
+    button: { label: 'Manage booking', url: `${env.frontendUrl}/my-bookings` },
+  });
+
+const sendPasswordResetEmail = (user, resetUrl) =>
+  sendEmail({
+    to: user.email,
+    subject: 'Reset your password',
+    body: `<p>Hi ${escapeHtml(user.name.split(' ')[0])}, we received a request to reset your password. This link is valid for 30 minutes and can be used once.</p><p>If you did not request this, you can safely ignore this email.</p>`,
+    button: { label: 'Reset password', url: resetUrl },
+  });
+
+const sendPasswordChangedEmail = (user) =>
+  sendEmail({
+    to: user.email,
+    subject: 'Your password was changed',
+    body: '<p>The password for your account was just changed. If this was not you, reset your password immediately and contact the salon.</p>',
+  });
+
+const sendPaymentReceipt = (user, payment, appointment, pdfBuffer) =>
+  sendEmail({
+    to: user.email,
+    subject: 'Payment receipt',
+    heading: 'Payment received. Thank you!',
+    body: `<p>Hi ${escapeHtml(user.name.split(' ')[0])}, we have received your payment. Your receipt is attached.</p>${detailsTable([
+      ['Receipt No.', payment.receiptNumber],
+      ['Amount', formatCurrency(payment.amount, payment.currency)],
+      ['Method', payment.method.replace('_', ' ')],
+      ['Appointment', appointment.reference],
+    ])}`,
+    attachments: pdfBuffer
+      ? [{ filename: `receipt-${payment.receiptNumber}.pdf`, content: pdfBuffer, contentType: 'application/pdf' }]
+      : undefined,
+  });
+
+const sendContactNotification = (to, message) =>
+  sendEmail({
+    to,
+    subject: 'New contact message',
+    body: `${detailsTable([['Name', message.name], ['Email', message.email], ['Phone', message.phone || '-'], ['Subject', message.subject || '-']])}<p>${escapeHtml(message.message)}</p>`,
+  });
+
+module.exports = {
+  sendEmail, sendWelcomeEmail, sendBookingConfirmation, sendAppointmentStatusEmail, sendRescheduleEmail,
+  sendAppointmentReminder, sendPasswordResetEmail, sendPasswordChangedEmail, sendPaymentReceipt, sendContactNotification,
+};

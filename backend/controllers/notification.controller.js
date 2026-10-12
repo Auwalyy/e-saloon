@@ -1,35 +1,31 @@
-const { query } = require('../config/database');
+/**
+ * Dashboard notifications for the signed-in user.
+ */
+const { Notification } = require('../models');
+const { asyncHandler, paginate } = require('../utils/helpers');
 
-exports.getNotifications = async (req, res) => {
-  try {
-    const result = await query(
-      'SELECT * FROM notifications WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-      [req.user.id]
-    );
-    const unread = await query(
-      'SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = false',
-      [req.user.id]
-    );
-    res.json({ success: true, data: result.rows, unread: parseInt(unread.rows[0].count) });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+exports.getNotifications = asyncHandler(async (req, res) => {
+  const filter = { recipient: req.user._id };
+  if (req.query.unread === 'true') filter.isRead = false;
 
-exports.markRead = async (req, res) => {
-  try {
-    await query('UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+  const [{ items, pagination }, unreadCount] = await Promise.all([
+    paginate(Notification, filter, { page: req.query.page, limit: req.query.limit || 15 }),
+    Notification.countDocuments({ recipient: req.user._id, isRead: false }),
+  ]);
+  res.json({ success: true, data: items, pagination, unreadCount });
+});
 
-exports.markAllRead = async (req, res) => {
-  try {
-    await query('UPDATE notifications SET is_read = true WHERE user_id = $1', [req.user.id]);
-    res.json({ success: true });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+exports.markRead = asyncHandler(async (req, res) => {
+  await Notification.updateOne({ _id: req.params.id, recipient: req.user._id }, { isRead: true });
+  res.json({ success: true });
+});
+
+exports.markAllRead = asyncHandler(async (req, res) => {
+  await Notification.updateMany({ recipient: req.user._id, isRead: false }, { isRead: true });
+  res.json({ success: true, message: 'All notifications marked as read' });
+});
+
+exports.deleteNotification = asyncHandler(async (req, res) => {
+  await Notification.deleteOne({ _id: req.params.id, recipient: req.user._id });
+  res.json({ success: true });
+});

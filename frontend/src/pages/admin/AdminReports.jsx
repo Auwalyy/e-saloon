@@ -1,156 +1,158 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { HiDownload, HiRefresh } from 'react-icons/hi';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { useState } from 'react';
 import toast from 'react-hot-toast';
-import { reportService } from '../../services/index';
-import { formatCurrency, downloadBlob } from '../../utils/helpers';
-import { Spinner } from '../../components/ui/Skeleton';
+import {
+  HiOutlineBan, HiOutlineCalendar, HiOutlineCash, HiOutlineCheckCircle, HiOutlineDocumentDownload, HiOutlineShoppingBag,
+  HiOutlineTable, HiOutlineUserAdd,
+} from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import { reportService } from '../../services';
+import { getErrorMessage } from '../../services/api';
+import { downloadBlob, formatCurrency, formatDate, PAYMENT_METHODS, toDateString } from '../../utils/helpers';
+import PageHeader from '../../components/admin/PageHeader';
+import { ChartCard, CHART_COLORS, RankingChart, RevenueChart } from '../../components/admin/Charts';
+import StatsCard from '../../components/ui/StatsCard';
 import Button from '../../components/ui/Button';
+import EmptyState from '../../components/ui/EmptyState';
+import { Skeleton, StatsSkeleton } from '../../components/ui/Skeleton';
 
+const PERIODS = [
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+  { value: 'annual', label: 'Annual' },
+];
+
+/** Business reports for a day, week, month or year, exportable to PDF and Excel. */
 const AdminReports = () => {
-  const [report, setReport] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [type, setType] = useState('monthly');
+  const [period, setPeriod] = useState('monthly');
+  const [date, setDate] = useState(() => toDateString());
   const [exporting, setExporting] = useState('');
 
-  const load = () => {
-    setLoading(true);
-    reportService.getReport({ type })
-      .then(({ data }) => setReport(data.data))
-      .finally(() => setLoading(false));
-  };
+  const { data, loading, error, refetch } = useFetch(() => reportService.get({ period, date }), [period, date]);
+  const report = data?.data;
 
-  useEffect(() => { load(); }, [type]);
-
-  const exportFile = async (format) => {
+  const exportReport = async (format) => {
     setExporting(format);
     try {
-      const fn = format === 'pdf' ? reportService.exportPDF : reportService.exportExcel;
-      const { data } = await fn({ type });
-      downloadBlob(data, `${type}-report.${format === 'pdf' ? 'pdf' : 'xlsx'}`);
-      toast.success(`${format.toUpperCase()} exported!`);
-    } catch { toast.error('Export failed'); }
-    finally { setExporting(''); }
+      const blob = await (format === 'pdf' ? reportService.exportPdf({ period, date }) : reportService.exportExcel({ period, date }));
+      downloadBlob(blob, `${period}-report-${report?.range.fromDate || date}.${format === 'pdf' ? 'pdf' : 'xlsx'}`);
+      toast.success(`${format === 'pdf' ? 'PDF' : 'Excel'} report downloaded`);
+    } catch (err) {
+      toast.error(getErrorMessage(err, 'Unable to export the report'));
+    } finally {
+      setExporting('');
+    }
   };
 
-  const totalRevenue = report?.revenue?.reduce((s, r) => s + parseFloat(r.total), 0) || 0;
+  const rangeLabel = report && (report.range.fromDate === report.range.toDate
+    ? formatDate(report.range.fromDate, 'EEEE, d MMMM yyyy')
+    : `${formatDate(report.range.fromDate)} to ${formatDate(report.range.toDate)}`);
 
   return (
-    <div className="space-y-6">
-      <div className="page-header">
-        <div>
-          <h1 className="text-2xl font-serif font-bold text-gray-900">Reports</h1>
-          <p className="text-gray-500 text-sm mt-1">Business analytics and reports</p>
+    <div>
+      <PageHeader title="Reports" subtitle={rangeLabel || 'Revenue, bookings and performance for any period.'}>
+        <Button size="sm" variant="outline" loading={exporting === 'pdf'} disabled={!report || Boolean(exporting)} onClick={() => exportReport('pdf')}>
+          <HiOutlineDocumentDownload className="w-4 h-4" /> Export PDF
+        </Button>
+        <Button size="sm" variant="outline" loading={exporting === 'excel'} disabled={!report || Boolean(exporting)} onClick={() => exportReport('excel')}>
+          <HiOutlineTable className="w-4 h-4" /> Export Excel
+        </Button>
+      </PageHeader>
+
+      <div className="card !p-4 mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex gap-2 overflow-x-auto scrollbar-hide" role="tablist" aria-label="Report period">
+          {PERIODS.map((option) => (
+            <button key={option.value} type="button" role="tab" aria-selected={period === option.value} onClick={() => setPeriod(option.value)} className={`tab ${period === option.value ? 'tab-active' : 'bg-gray-100'}`}>
+              {option.label}
+            </button>
+          ))}
         </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => exportFile('pdf')} loading={exporting === 'pdf'}>
-            <HiDownload className="w-4 h-4" /> PDF
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => exportFile('excel')} loading={exporting === 'excel'}>
-            <HiDownload className="w-4 h-4" /> Excel
-          </Button>
-        </div>
+        <label className="flex items-center gap-2 text-sm text-gray-600">
+          Any date in the period
+          <input type="date" className="input !w-44 !py-2" value={date} max={toDateString()} onChange={(event) => event.target.value && setDate(event.target.value)} />
+        </label>
       </div>
 
-      {/* Period selector */}
-      <div className="flex gap-2">
-        {['daily', 'weekly', 'monthly', 'annual'].map(t => (
-          <button key={t} onClick={() => setType(t)}
-            className={`px-4 py-2 rounded-xl text-sm font-medium capitalize transition-colors ${type === t ? 'bg-gold-500 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
-            {t}
-          </button>
-        ))}
-        <button onClick={load} className="p-2 hover:bg-gray-100 rounded-xl transition-colors ml-auto">
-          <HiRefresh className="w-4 h-4 text-gray-500" />
-        </button>
-      </div>
-
-      {loading ? (
-        <div className="flex justify-center py-20"><Spinner size="lg" /></div>
-      ) : (
+      {loading && (
         <div className="space-y-6">
-          {/* Summary */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              ['Total Revenue', formatCurrency(totalRevenue), 'gold'],
-              ['Total Transactions', report?.revenue?.reduce((s, r) => s + parseInt(r.count), 0) || 0, 'blue'],
-              ['Appointments', report?.appointments?.reduce((s, a) => s + parseInt(a.count), 0) || 0, 'green'],
-              ['Top Service', report?.top_services?.[0]?.name || '—', 'purple'],
-            ].map(([label, value, color]) => (
-              <div key={label} className="card">
-                <p className="text-xs text-gray-400 font-medium">{label}</p>
-                <p className={`text-xl font-bold mt-1 ${color === 'gold' ? 'text-gold-600' : color === 'green' ? 'text-green-600' : color === 'blue' ? 'text-blue-600' : 'text-purple-600'}`}>{value}</p>
-              </div>
-            ))}
+          <StatsSkeleton count={8} />
+          <Skeleton className="h-80" />
+        </div>
+      )}
+      {!loading && error && <div className="card"><EmptyState title="Unable to load the report" message={error} action={<Button size="sm" onClick={refetch}>Try again</Button>} /></div>}
+
+      {!loading && report && (
+        <div className="space-y-6">
+          <div className="grid gap-4 grid-cols-2 xl:grid-cols-4">
+            <StatsCard title="Revenue" value={formatCurrency(report.summary.revenue)} icon={HiOutlineCash} color="green" subtitle={`${report.summary.paymentsCount} payment${report.summary.paymentsCount === 1 ? '' : 's'}`} />
+            <StatsCard title="Average Payment" value={formatCurrency(Math.round(report.summary.averagePayment))} icon={HiOutlineCash} color="gold" delay={0.03} />
+            <StatsCard title="Bookings" value={report.summary.bookings} icon={HiOutlineCalendar} color="blue" subtitle={`${report.summary.pending + report.summary.confirmed} still open`} delay={0.06} />
+            <StatsCard title="Completed" value={report.summary.completed} icon={HiOutlineCheckCircle} color="green" delay={0.09} />
+            <StatsCard title="Cancelled / Rejected" value={report.summary.cancelled + report.summary.rejected} icon={HiOutlineBan} color="red" subtitle={`${report.summary.noShow} no-show${report.summary.noShow === 1 ? '' : 's'}`} delay={0.12} />
+            <StatsCard title="New Customers" value={report.summary.newCustomers} icon={HiOutlineUserAdd} color="purple" delay={0.15} />
+            <StatsCard title="Retail Sales" value={formatCurrency(report.summary.productSales)} icon={HiOutlineShoppingBag} color="gold" delay={0.18} />
+            <StatsCard title="Stock Purchases" value={formatCurrency(report.summary.stockPurchases)} icon={HiOutlineShoppingBag} color="gray" delay={0.21} />
           </div>
 
-          {/* Revenue Chart */}
-          <div className="card">
-            <h3 className="font-semibold text-gray-900 mb-4">Revenue by Day</h3>
-            <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={report?.revenue || []}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} tickFormatter={v => `₦${(v / 1000).toFixed(0)}k`} />
-                <Tooltip formatter={v => formatCurrency(v)} />
-                <Bar dataKey="total" fill="#D4AF37" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          {period !== 'daily' && (
+            <ChartCard title="Revenue" subtitle={period === 'annual' ? 'Payments received per month' : 'Payments received per day'}>
+              <RevenueChart data={report.revenueSeries} xKey={period === 'annual' ? 'label' : 'key'} dateAxis={period !== 'annual'} />
+            </ChartCard>
+          )}
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <ChartCard title="Top Services" subtitle="By number of bookings in this period">
+              <RankingChart data={report.topServices.slice(0, 8)} height={Math.max(160, Math.min(8, report.topServices.length) * 36)} />
+            </ChartCard>
+            <ChartCard title="Stylist Performance" subtitle="Value of bookings handled in this period">
+              <RankingChart data={report.topStylists} dataKey="value" name="Booking value" color={CHART_COLORS.blue} valueFormatter={(value) => formatCurrency(value, { compact: true })} height={Math.max(160, report.topStylists.length * 36)} />
+            </ChartCard>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Top Services */}
-            <div className="card">
-              <h3 className="font-semibold text-gray-900 mb-4">Top Services</h3>
-              <div className="space-y-3">
-                {(report?.top_services || []).map((svc, i) => (
-                  <div key={i} className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <span className="w-6 h-6 bg-gold-100 text-gold-700 rounded-full flex items-center justify-center text-xs font-bold">{i + 1}</span>
-                      <span className="text-sm text-gray-700">{svc.name}</span>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-sm font-semibold text-gold-600">{formatCurrency(svc.revenue)}</p>
-                      <p className="text-xs text-gray-400">{svc.bookings} bookings</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <section className="card">
+              <h2 className="font-semibold text-gray-900 font-sans mb-3">Payments by Method</h2>
+              {report.paymentMethods.length === 0 ? <p className="text-sm text-gray-400 py-6 text-center">No payments in this period</p> : (
+                <table className="table">
+                  <thead><tr><th>Method</th><th className="text-right">Payments</th><th className="text-right">Amount</th></tr></thead>
+                  <tbody>
+                    {report.paymentMethods.map((row) => (
+                      <tr key={row.method}>
+                        <td>{PAYMENT_METHODS[row.method]}</td>
+                        <td className="text-right">{row.count}</td>
+                        <td className="text-right font-medium">{formatCurrency(row.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
 
-            {/* Top Customers */}
-            <div className="card">
-              <h3 className="font-semibold text-gray-900 mb-4">Top Customers</h3>
-              <div className="space-y-3">
-                {(report?.top_customers || []).map((cust, i) => (
-                  <div key={i} className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <span className="w-6 h-6 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-xs font-bold">{i + 1}</span>
-                      <div>
-                        <p className="text-sm text-gray-700">{cust.name}</p>
-                        <p className="text-xs text-gray-400">{cust.visits} visits</p>
-                      </div>
-                    </div>
-                    <p className="text-sm font-semibold text-gold-600">{formatCurrency(cust.spent)}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Appointment Status */}
-          <div className="card">
-            <h3 className="font-semibold text-gray-900 mb-4">Appointment Breakdown</h3>
-            <div className="flex flex-wrap gap-4">
-              {(report?.appointments || []).map(a => (
-                <div key={a.status} className="flex items-center gap-2 bg-gray-50 rounded-xl px-4 py-3">
-                  <span className={`badge ${a.status === 'completed' ? 'badge-green' : a.status === 'cancelled' ? 'badge-red' : 'badge-gold'}`}>{a.status}</span>
-                  <span className="font-bold text-gray-900">{a.count}</span>
+            <section className="card">
+              <h2 className="font-semibold text-gray-900 font-sans mb-3">Service Breakdown</h2>
+              {report.topServices.length === 0 ? <p className="text-sm text-gray-400 py-6 text-center">No bookings in this period</p> : (
+                <div className="max-h-72 overflow-y-auto">
+                  <table className="table">
+                    <thead><tr><th>Service</th><th className="text-right">Bookings</th><th className="text-right">Value</th></tr></thead>
+                    <tbody>
+                      {report.topServices.map((row) => (
+                        <tr key={row.id}>
+                          <td>{row.name}</td>
+                          <td className="text-right">{row.bookings}</td>
+                          <td className="text-right font-medium">{formatCurrency(row.value)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ))}
-            </div>
+              )}
+            </section>
           </div>
+
+          <p className="text-xs text-gray-400">
+            Revenue counts payments received in the period. Bookings are counted by appointment date, and booking values include
+            appointments that are still open.
+          </p>
         </div>
       )}
     </div>

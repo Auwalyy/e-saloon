@@ -1,135 +1,171 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { HiPlus, HiTrash } from 'react-icons/hi';
-import { useForm } from 'react-hook-form';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { galleryService } from '../../services/index';
-import { Spinner } from '../../components/ui/Skeleton';
-import Modal from '../../components/ui/Modal';
+import { HiOutlineEye, HiOutlineEyeOff, HiOutlinePencil, HiOutlinePhotograph, HiOutlinePlus, HiOutlineTrash } from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import { galleryService } from '../../services';
+import { getErrorMessage } from '../../services/api';
+import { cleanParams } from '../../utils/helpers';
+import PageHeader from '../../components/admin/PageHeader';
+import SmartImage from '../../components/ui/SmartImage';
 import Button from '../../components/ui/Button';
+import Input from '../../components/ui/Input';
+import ImageUpload from '../../components/ui/ImageUpload';
+import Modal from '../../components/ui/Modal';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import Pagination from '../../components/ui/Pagination';
+import EmptyState from '../../components/ui/EmptyState';
+import { Skeleton } from '../../components/ui/Skeleton';
 
-const CATEGORIES = ['hair', 'braids', 'facials', 'spa', 'makeup', 'pedicure', 'other'];
+const CATEGORIES = ['Hair', 'Braids', 'Facials', 'Spa', 'Makeup', 'Pedicure'];
 
-const AdminGallery = () => {
-  const [images, setImages] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [activeCategory, setActiveCategory] = useState('all');
-  const [modalOpen, setModalOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState(null);
+const GalleryForm = ({ item, isOpen, onClose, onSaved }) => {
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState(CATEGORIES[0]);
+  const [image, setImage] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const { register, handleSubmit, reset } = useForm();
 
-  const load = () => {
-    setLoading(true);
-    galleryService.getAll({ category: activeCategory !== 'all' ? activeCategory : undefined })
-      .then(({ data }) => setImages(data.data || []))
-      .finally(() => setLoading(false));
-  };
+  useEffect(() => {
+    if (!isOpen) return;
+    setTitle(item?.title || '');
+    setCategory(item?.category || CATEGORIES[0]);
+    setImage(null);
+  }, [isOpen, item]);
 
-  useEffect(() => { load(); }, [activeCategory]);
-
-  const onSubmit = async (data) => {
-    if (!data.image?.[0]) return toast.error('Please select an image');
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!item && !image) return toast.error('Please choose an image to upload');
     setSaving(true);
     try {
-      const fd = new FormData();
-      fd.append('image', data.image[0]);
-      fd.append('title', data.title || '');
-      fd.append('category', data.category);
-      fd.append('is_featured', data.is_featured ? 'true' : 'false');
-      await galleryService.add(fd);
-      toast.success('Image uploaded!');
-      setModalOpen(false);
-      reset();
-      load();
-    } catch { toast.error('Upload failed'); }
-    finally { setSaving(false); }
-  };
-
-  const handleDelete = async () => {
-    setDeleting(true);
-    try {
-      await galleryService.delete(deleteTarget.id);
-      toast.success('Image deleted');
-      setDeleteTarget(null);
-      load();
-    } catch { toast.error('Delete failed'); }
-    finally { setDeleting(false); }
+      const { message } = item
+        ? await galleryService.update(item.id, { title, category }, image)
+        : await galleryService.create({ title, category }, image);
+      toast.success(message);
+      onSaved();
+      onClose();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to save the image'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="space-y-6">
-      <div className="page-header">
+    <Modal isOpen={isOpen} onClose={onClose} title={item ? 'Edit gallery image' : 'Add gallery image'}>
+      <form onSubmit={submit} className="space-y-4">
+        <ImageUpload label="Image" currentUrl={item?.image} onChange={setImage} />
+        <Input label="Caption (optional)" maxLength={150} value={title} onChange={(event) => setTitle(event.target.value)} placeholder="e.g. Bridal glam" />
         <div>
-          <h1 className="text-2xl font-serif font-bold text-gray-900">Gallery</h1>
-          <p className="text-gray-500 text-sm mt-1">{images.length} images</p>
+          <label className="label" htmlFor="gallery-category">Category</label>
+          <select id="gallery-category" className="input" value={category} onChange={(event) => setCategory(event.target.value)}>
+            {CATEGORIES.map((option) => <option key={option} value={option}>{option}</option>)}
+          </select>
         </div>
-        <Button onClick={() => setModalOpen(true)}><HiPlus className="w-4 h-4" /> Upload Image</Button>
-      </div>
+        <div className="flex justify-end gap-3 pt-2">
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button type="submit" size="sm" loading={saving}>{item ? 'Save Changes' : 'Add Image'}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
 
-      <div className="flex flex-wrap gap-2">
-        {['all', ...CATEGORIES].map(cat => (
-          <button key={cat} onClick={() => setActiveCategory(cat)}
-            className={`px-4 py-1.5 rounded-full text-sm font-medium capitalize transition-all ${activeCategory === cat ? 'bg-gold-500 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gold-50'}`}>
-            {cat}
+/** Gallery management: upload, categorise, hide and delete the photos shown on the website. */
+const AdminGallery = () => {
+  const [category, setCategory] = useState('');
+  const [page, setPage] = useState(1);
+  const [editing, setEditing] = useState(undefined); // undefined = closed, null = new
+  const [deleting, setDeleting] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+
+  const { data, loading, refetch } = useFetch(() => galleryService.getAll(cleanParams({ category, page, limit: 12 })), [category, page]);
+  const items = data?.data || [];
+
+  useEffect(() => { setPage(1); }, [category]);
+
+  const toggleVisibility = async (item) => {
+    setBusyId(item.id);
+    try {
+      await galleryService.update(item.id, { isActive: !item.isActive });
+      toast.success(item.isActive ? 'Image hidden from the website' : 'Image is visible again');
+      refetch();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to update the image'));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const confirmDelete = async () => {
+    setBusyId(deleting.id);
+    try {
+      await galleryService.remove(deleting.id);
+      toast.success('Image deleted');
+      setDeleting(null);
+      refetch();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to delete the image'));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div>
+      <PageHeader title="Gallery" subtitle="Photos shown on the public gallery page.">
+        <Button size="sm" onClick={() => setEditing(null)}><HiOutlinePlus className="w-4 h-4" /> Add Image</Button>
+      </PageHeader>
+
+      <div className="flex gap-2 overflow-x-auto scrollbar-hide mb-4" role="tablist">
+        {['', ...CATEGORIES].map((option) => (
+          <button key={option || 'all'} type="button" role="tab" aria-selected={category === option} onClick={() => setCategory(option)} className={`tab ${category === option ? 'tab-active' : 'bg-white shadow-sm'}`}>
+            {option || 'All'}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="flex justify-center py-20"><Spinner size="lg" /></div>
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">{Array.from({ length: 8 }, (_, i) => <Skeleton key={i} className="aspect-square" />)}</div>
+      ) : items.length === 0 ? (
+        <div className="card"><EmptyState icon={HiOutlinePhotograph} title="No images in this category" action={<Button size="sm" onClick={() => setEditing(null)}>Upload an image</Button>} /></div>
       ) : (
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          {images.map((img, i) => (
-            <motion.div key={img.id} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.03 }}
-              className="relative group rounded-xl overflow-hidden aspect-square shadow-card"
-            >
-              <img src={img.image_url} alt={img.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300" />
-              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors duration-300 flex items-center justify-center">
-                <button onClick={() => setDeleteTarget(img)}
-                  className="opacity-0 group-hover:opacity-100 p-2 bg-red-500 text-white rounded-full transition-opacity">
-                  <HiTrash className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/60 to-transparent">
-                <span className="text-white text-xs capitalize">{img.category}</span>
-              </div>
-            </motion.div>
-          ))}
-        </div>
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+            {items.map((item) => (
+              <figure key={item.id} className="bg-white rounded-2xl shadow-card overflow-hidden">
+                <div className="relative">
+                  <SmartImage src={item.image} alt={item.title || item.category} className={`aspect-square ${item.isActive ? '' : 'opacity-40'}`} />
+                  {!item.isActive && <span className="badge-gray absolute top-2 left-2">Hidden</span>}
+                </div>
+                <figcaption className="p-3">
+                  <p className="font-medium text-gray-900 text-sm truncate">{item.title || 'Untitled'}</p>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="badge-gold">{item.category}</span>
+                    <div className="flex">
+                      <button type="button" className="icon-btn !p-1.5" disabled={busyId === item.id} title={item.isActive ? 'Hide' : 'Show'} aria-label={item.isActive ? 'Hide image' : 'Show image'} onClick={() => toggleVisibility(item)}>
+                        {item.isActive ? <HiOutlineEyeOff className="w-4 h-4" /> : <HiOutlineEye className="w-4 h-4" />}
+                      </button>
+                      <button type="button" className="icon-btn !p-1.5" title="Edit" aria-label="Edit image" onClick={() => setEditing(item)}><HiOutlinePencil className="w-4 h-4" /></button>
+                      <button type="button" className="icon-btn !p-1.5 text-red-500" title="Delete" aria-label="Delete image" onClick={() => setDeleting(item)}><HiOutlineTrash className="w-4 h-4" /></button>
+                    </div>
+                  </div>
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+          <Pagination pagination={data.pagination} onPageChange={setPage} />
+        </>
       )}
 
-      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="Upload Image" size="sm">
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div>
-            <label className="label">Image *</label>
-            <input type="file" accept="image/*" className="input py-2" {...register('image')} />
-          </div>
-          <div>
-            <label className="label">Title</label>
-            <input className="input" placeholder="Optional title" {...register('title')} />
-          </div>
-          <div>
-            <label className="label">Category</label>
-            <select className="input" {...register('category', { required: true })}>
-              {CATEGORIES.map(c => <option key={c} value={c} className="capitalize">{c}</option>)}
-            </select>
-          </div>
-          <div className="flex items-center gap-2">
-            <input type="checkbox" id="featured" {...register('is_featured')} className="rounded border-gray-300 text-gold-500" />
-            <label htmlFor="featured" className="text-sm text-gray-700">Featured image</label>
-          </div>
-          <div className="flex gap-3 justify-end">
-            <Button variant="outline" type="button" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>Upload</Button>
-          </div>
-        </form>
-      </Modal>
-
-      <ConfirmDialog isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDelete}
-        loading={deleting} title="Delete Image" message="Are you sure you want to delete this image?" />
+      <GalleryForm isOpen={editing !== undefined} item={editing || null} onClose={() => setEditing(undefined)} onSaved={refetch} />
+      <ConfirmDialog
+        isOpen={Boolean(deleting)}
+        onClose={() => setDeleting(null)}
+        onConfirm={confirmDelete}
+        loading={Boolean(deleting) && busyId === deleting.id}
+        title="Delete this image?"
+        confirmLabel="Delete"
+        message="The image will be permanently removed from the gallery."
+      />
     </div>
   );
 };

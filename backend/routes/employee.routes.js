@@ -1,18 +1,22 @@
-const router = require('express').Router();
-const ctrl = require('../controllers/employee.controller');
-const { protect, authorize } = require('../middleware/auth.middleware');
-const upload = require('../middleware/upload.middleware');
+/**
+ * Employee (stylist) routes: public listing, admin CRUD and schedules.
+ */
+const express = require('express');
+const controller = require('../controllers/employee.controller');
+const rules = require('../validators/catalog.validator');
+const { idParam, pagination } = require('../validators/common.validator');
+const validate = require('../middleware/validate.middleware');
+const { optionalAuth, adminOnly } = require('../middleware/auth.middleware');
+const { uploadImage } = require('../middleware/upload.middleware');
 
-router.get('/', ctrl.getEmployees);
-router.get('/:id', ctrl.getEmployee);
-router.get('/by-service/:serviceId', ctrl.getEmployeesByService);
-router.post('/', protect, authorize('admin'),
-  (req, res, next) => { req.uploadFolder = 'employees'; next(); },
-  upload.single('avatar'), ctrl.createEmployee);
-router.put('/:id', protect, authorize('admin'),
-  (req, res, next) => { req.uploadFolder = 'employees'; next(); },
-  upload.single('avatar'), ctrl.updateEmployee);
-router.delete('/:id', protect, authorize('admin'), ctrl.deleteEmployee);
-router.put('/:id/availability', protect, authorize('admin'), ctrl.updateAvailability);
+const router = express.Router();
+
+router.get('/', optionalAuth, validate(pagination), controller.getEmployees);
+router.get('/:id', optionalAuth, validate(idParam), controller.getEmployee);
+router.get('/:id/schedule', adminOnly, validate(idParam), controller.getSchedule);
+
+router.post('/', adminOnly, uploadImage('photo'), validate(rules.createEmployee), controller.createEmployee);
+router.put('/:id', adminOnly, uploadImage('photo'), validate([...idParam, ...rules.updateEmployee]), controller.updateEmployee);
+router.delete('/:id', adminOnly, validate(idParam), controller.deleteEmployee);
 
 module.exports = router;

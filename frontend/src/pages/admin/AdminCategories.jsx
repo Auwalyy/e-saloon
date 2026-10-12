@@ -1,123 +1,132 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { HiPlus, HiPencil, HiTrash } from 'react-icons/hi';
+import { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import toast from 'react-hot-toast';
-import { categoryService } from '../../services/index';
-import { Spinner } from '../../components/ui/Skeleton';
-import Modal from '../../components/ui/Modal';
+import { HiOutlinePencil, HiOutlinePlus, HiOutlineTag, HiOutlineTrash } from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import { categoryService } from '../../services';
+import { getErrorMessage } from '../../services/api';
+import { applyServerErrors } from '../../utils/validation';
+import PageHeader from '../../components/admin/PageHeader';
+import SmartImage from '../../components/ui/SmartImage';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import Textarea from '../../components/ui/Textarea';
+import ImageUpload from '../../components/ui/ImageUpload';
+import Modal from '../../components/ui/Modal';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import EmptyState from '../../components/ui/EmptyState';
+import { CardGridSkeleton } from '../../components/ui/Skeleton';
 
-const AdminCategories = () => {
-  const [categories, setCategories] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState(null);
-  const [deleteTarget, setDeleteTarget] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const { register, handleSubmit, reset, formState: { errors } } = useForm();
+const CategoryForm = ({ category, isOpen, onClose, onSaved }) => {
+  const [image, setImage] = useState(null);
+  const { register, handleSubmit, reset, setError, formState: { errors, isSubmitting } } = useForm();
 
-  const load = () => {
-    setLoading(true);
-    categoryService.getAll().then(({ data }) => setCategories(data.data || [])).finally(() => setLoading(false));
-  };
+  useEffect(() => {
+    if (!isOpen) return;
+    setImage(null);
+    reset({ name: category?.name || '', description: category?.description || '', isActive: String(category?.isActive ?? true) });
+  }, [isOpen, category, reset]);
 
-  useEffect(() => { load(); }, []);
-
-  const openCreate = () => { setEditing(null); reset({}); setModalOpen(true); };
-  const openEdit = (cat) => { setEditing(cat); reset({ name: cat.name, description: cat.description }); setModalOpen(true); };
-
-  const onSubmit = async (data) => {
-    setSaving(true);
+  const onSubmit = async (values) => {
+    const payload = { ...values, isActive: values.isActive === 'true' };
     try {
-      const fd = new FormData();
-      Object.entries(data).forEach(([k, v]) => { if (v !== undefined && k !== 'image') fd.append(k, v); });
-      if (data.image?.[0]) fd.append('image', data.image[0]);
-      if (editing) await categoryService.update(editing.id, fd);
-      else await categoryService.create(fd);
-      toast.success(editing ? 'Category updated!' : 'Category created!');
-      setModalOpen(false);
-      load();
-    } catch (err) { toast.error(err.response?.data?.message || 'Save failed'); }
-    finally { setSaving(false); }
-  };
-
-  const handleDelete = async () => {
-    setDeleting(true);
-    try {
-      await categoryService.delete(deleteTarget.id);
-      toast.success('Category deactivated');
-      setDeleteTarget(null);
-      load();
-    } catch { toast.error('Delete failed'); }
-    finally { setDeleting(false); }
+      const { message } = category ? await categoryService.update(category.id, payload, image) : await categoryService.create(payload, image);
+      toast.success(message);
+      onSaved();
+      onClose();
+    } catch (error) {
+      if (!applyServerErrors(error, setError)) toast.error(getErrorMessage(error, 'Unable to save the category'));
+    }
   };
 
   return (
-    <div className="space-y-6">
-      <div className="page-header">
+    <Modal isOpen={isOpen} onClose={onClose} title={category ? 'Edit category' : 'Add category'}>
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
+        <ImageUpload label="Category image" currentUrl={category?.image} onChange={setImage} />
+        <Input label="Name" error={errors.name?.message} {...register('name', { required: 'Name is required', minLength: { value: 2, message: 'Name is too short' } })} />
+        <Textarea label="Description" rows={3} maxLength={500} {...register('description')} />
         <div>
-          <h1 className="text-2xl font-serif font-bold text-gray-900">Categories</h1>
-          <p className="text-gray-500 text-sm mt-1">Manage service categories</p>
+          <label className="label" htmlFor="category-status">Status</label>
+          <select id="category-status" className="input" {...register('isActive')}>
+            <option value="true">Active</option>
+            <option value="false">Inactive (hidden from customers)</option>
+          </select>
         </div>
-        <Button onClick={openCreate}><HiPlus className="w-4 h-4" /> Add Category</Button>
-      </div>
+        <div className="flex justify-end gap-3 pt-2">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button type="submit" size="sm" loading={isSubmitting}>{category ? 'Save Changes' : 'Add Category'}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
 
-      {loading ? <div className="flex justify-center py-20"><Spinner size="lg" /></div> : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {categories.map((cat, i) => (
-            <motion.div key={cat.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-              className="card hover:shadow-card-hover transition-shadow flex items-center justify-between"
-            >
-              <div className="flex items-center gap-3">
-                {cat.image ? (
-                  <img src={cat.image} alt={cat.name} className="w-12 h-12 rounded-xl object-cover" />
-                ) : (
-                  <div className="w-12 h-12 bg-gold-100 rounded-xl flex items-center justify-center text-gold-600 font-bold text-lg">
-                    {cat.name?.[0]}
+/** Category management: the groups that services are organised into. */
+const AdminCategories = () => {
+  const { data, loading, refetch } = useFetch(() => categoryService.getAll());
+  const [editing, setEditing] = useState(undefined); // undefined = closed, null = new
+  const [deleting, setDeleting] = useState(null);
+  const [working, setWorking] = useState(false);
+  const categories = data?.data || [];
+
+  const confirmDelete = async () => {
+    setWorking(true);
+    try {
+      await categoryService.remove(deleting.id);
+      toast.success('Category deleted');
+      setDeleting(null);
+      refetch();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to delete the category'));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div>
+      <PageHeader title="Categories" subtitle="Group services so customers can find them quickly.">
+        <Button size="sm" onClick={() => setEditing(null)}><HiOutlinePlus className="w-4 h-4" /> Add Category</Button>
+      </PageHeader>
+
+      {loading ? (
+        <CardGridSkeleton count={6} />
+      ) : categories.length === 0 ? (
+        <div className="card"><EmptyState icon={HiOutlineTag} title="No categories yet" action={<Button size="sm" onClick={() => setEditing(null)}>Add a category</Button>} /></div>
+      ) : (
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+          {categories.map((category) => (
+            <article key={category.id} className="bg-white rounded-2xl shadow-card overflow-hidden flex flex-col">
+              <SmartImage src={category.image} alt="" className="h-36" icon={HiOutlineTag} />
+              <div className="p-5 flex-1 flex flex-col">
+                <div className="flex items-start justify-between gap-2">
+                  <h2 className="text-lg font-semibold text-gray-900 font-sans">{category.name}</h2>
+                  <span className={category.isActive ? 'badge-green' : 'badge-gray'}>{category.isActive ? 'Active' : 'Inactive'}</span>
+                </div>
+                <p className="text-sm text-gray-500 mt-1 flex-1">{category.description || 'No description'}</p>
+                <div className="flex items-center justify-between mt-4 pt-4 border-t border-gray-100">
+                  <span className="text-sm text-gray-500">{category.serviceCount} service{category.serviceCount === 1 ? '' : 's'}</span>
+                  <div className="flex gap-0.5">
+                    <button type="button" className="icon-btn" title="Edit" aria-label={`Edit ${category.name}`} onClick={() => setEditing(category)}><HiOutlinePencil className="w-5 h-5" /></button>
+                    <button type="button" className="icon-btn text-red-500" title="Delete" aria-label={`Delete ${category.name}`} onClick={() => setDeleting(category)}><HiOutlineTrash className="w-5 h-5" /></button>
                   </div>
-                )}
-                <div>
-                  <h3 className="font-semibold text-gray-900">{cat.name}</h3>
-                  <p className="text-xs text-gray-400">{cat.service_count} services</p>
                 </div>
               </div>
-              <div className="flex gap-1">
-                <button onClick={() => openEdit(cat)} className="p-2 hover:bg-blue-50 rounded-lg text-blue-600 transition-colors">
-                  <HiPencil className="w-4 h-4" />
-                </button>
-                <button onClick={() => setDeleteTarget(cat)} className="p-2 hover:bg-red-50 rounded-lg text-red-500 transition-colors">
-                  <HiTrash className="w-4 h-4" />
-                </button>
-              </div>
-            </motion.div>
+            </article>
           ))}
         </div>
       )}
 
-      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit Category' : 'Add Category'} size="sm">
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <Input label="Category Name" error={errors.name?.message} {...register('name', { required: 'Name is required' })} />
-          <div>
-            <label className="label">Description</label>
-            <textarea className="input resize-none" rows={3} {...register('description')} />
-          </div>
-          <div>
-            <label className="label">Image</label>
-            <input type="file" accept="image/*" className="input py-2" {...register('image')} />
-          </div>
-          <div className="flex gap-3 justify-end">
-            <Button variant="outline" type="button" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>{editing ? 'Update' : 'Create'}</Button>
-          </div>
-        </form>
-      </Modal>
-
-      <ConfirmDialog isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDelete}
-        loading={deleting} title="Deactivate Category" message={`Deactivate "${deleteTarget?.name}"?`} />
+      <CategoryForm isOpen={editing !== undefined} category={editing || null} onClose={() => setEditing(undefined)} onSaved={refetch} />
+      <ConfirmDialog
+        isOpen={Boolean(deleting)}
+        onClose={() => setDeleting(null)}
+        onConfirm={confirmDelete}
+        loading={working}
+        title="Delete this category?"
+        confirmLabel="Delete"
+        message={deleting?.serviceCount ? `"${deleting.name}" still has ${deleting.serviceCount} service(s). Move or delete them first.` : `"${deleting?.name}" will be permanently removed.`}
+      />
     </div>
   );
 };

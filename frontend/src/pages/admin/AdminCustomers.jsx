@@ -1,157 +1,280 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { HiSearch, HiEye, HiBan, HiCheckCircle } from 'react-icons/hi';
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
 import toast from 'react-hot-toast';
-import { customerService } from '../../services/index';
-import { formatDate, formatCurrency, getInitials } from '../../utils/helpers';
-import { TableSkeleton } from '../../components/ui/Skeleton';
+import { HiOutlineBan, HiOutlineCheckCircle, HiOutlineEye, HiOutlinePlus, HiOutlineTrash, HiOutlineUsers } from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import useDebounce from '../../hooks/useDebounce';
+import { customerService } from '../../services';
+import { getErrorMessage } from '../../services/api';
+import { cleanParams, formatCurrency, formatDate, formatTime, getStatusColor, humanize, PAYMENT_METHODS } from '../../utils/helpers';
+import { rules, applyServerErrors } from '../../utils/validation';
+import PageHeader from '../../components/admin/PageHeader';
+import Avatar from '../../components/ui/Avatar';
+import Button from '../../components/ui/Button';
+import Input from '../../components/ui/Input';
 import Modal from '../../components/ui/Modal';
+import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import SearchInput from '../../components/ui/SearchInput';
 import Pagination from '../../components/ui/Pagination';
+import EmptyState from '../../components/ui/EmptyState';
+import { Skeleton, TableSkeleton } from '../../components/ui/Skeleton';
 
-const AdminCustomers = () => {
-  const [customers, setCustomers] = useState([]);
-  const [pagination, setPagination] = useState({});
-  const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState(null);
-  const [detailLoading, setDetailLoading] = useState(false);
+/* ------------------------------ Customer detail ----------------------------- */
 
-  const load = () => {
-    setLoading(true);
-    customerService.getAll({ page, limit: 15, search })
-      .then(({ data }) => { setCustomers(data.data || []); setPagination(data.pagination || {}); })
-      .finally(() => setLoading(false));
-  };
+const CustomerDetail = ({ customerId, onClose }) => {
+  const [tab, setTab] = useState('bookings');
+  const { data, loading } = useFetch(
+    () => (customerId ? customerService.getOne(customerId) : Promise.resolve(null)),
+    [customerId]
+  );
+  const detail = data?.data;
 
-  useEffect(() => { load(); }, [page, search]);
+  useEffect(() => { setTab('bookings'); }, [customerId]);
 
-  const viewCustomer = async (id) => {
-    setDetailLoading(true);
+  return (
+    <Modal isOpen={Boolean(customerId)} onClose={onClose} title="Customer profile" size="xl">
+      {loading || !detail ? (
+        <div className="space-y-4"><Skeleton className="h-20" /><Skeleton className="h-64" /></div>
+      ) : (
+        <div className="space-y-5">
+          <div className="flex items-center gap-4">
+            <Avatar src={detail.customer.avatar} name={detail.customer.name} size="lg" />
+            <div className="min-w-0 flex-1">
+              <p className="text-lg font-semibold text-gray-900">{detail.customer.name}</p>
+              <p className="text-sm text-gray-500 truncate">{detail.customer.email} · {detail.customer.phone || 'No phone'}</p>
+              <p className="text-xs text-gray-400">Joined {formatDate(detail.customer.createdAt)}</p>
+            </div>
+            <span className={detail.customer.isActive ? 'badge-green' : 'badge-red'}>{detail.customer.isActive ? 'Active' : 'Deactivated'}</span>
+          </div>
+
+          <dl className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              ['Total bookings', detail.stats.totalBookings],
+              ['Completed', detail.stats.completed],
+              ['Cancelled / no-show', detail.stats.cancelled + detail.stats.noShow],
+              ['Total spent', formatCurrency(detail.stats.totalSpent)],
+            ].map(([label, value]) => (
+              <div key={label} className="bg-salon-bg rounded-xl p-3 text-center">
+                <dd className="text-lg font-bold text-gray-900">{value}</dd>
+                <dt className="text-xs text-gray-500">{label}</dt>
+              </div>
+            ))}
+          </dl>
+
+          <div className="flex gap-2" role="tablist">
+            <button type="button" role="tab" aria-selected={tab === 'bookings'} onClick={() => setTab('bookings')} className={`tab ${tab === 'bookings' ? 'tab-active' : 'bg-gray-100'}`}>Booking history</button>
+            <button type="button" role="tab" aria-selected={tab === 'spending'} onClick={() => setTab('spending')} className={`tab ${tab === 'spending' ? 'tab-active' : 'bg-gray-100'}`}>Spending history</button>
+          </div>
+
+          {tab === 'bookings' && (
+            detail.appointments.length === 0 ? <p className="text-sm text-gray-500 py-4">No bookings yet.</p> : (
+              <div className="table-container !shadow-none border border-gray-100">
+                <table className="table">
+                  <thead><tr><th>Date</th><th>Service</th><th>Stylist</th><th>Amount</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {detail.appointments.map((appointment) => (
+                      <tr key={appointment.id}>
+                        <td className="whitespace-nowrap">{formatDate(appointment.date)} · {formatTime(appointment.startTime)}</td>
+                        <td>{appointment.service?.name}</td>
+                        <td>{appointment.employee?.name}</td>
+                        <td>{formatCurrency(appointment.price)}</td>
+                        <td><span className={getStatusColor(appointment.status)}>{humanize(appointment.status)}</span></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+
+          {tab === 'spending' && (
+            detail.payments.length === 0 ? <p className="text-sm text-gray-500 py-4">No payments yet.</p> : (
+              <div className="table-container !shadow-none border border-gray-100">
+                <table className="table">
+                  <thead><tr><th>Payment ID</th><th>Service</th><th>Method</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead>
+                  <tbody>
+                    {detail.payments.map((payment) => (
+                      <tr key={payment.id}>
+                        <td className="font-mono text-xs">{payment.reference}</td>
+                        <td>{payment.appointment?.service?.name || '-'}</td>
+                        <td>{PAYMENT_METHODS[payment.method]}</td>
+                        <td>{formatCurrency(payment.amount)}</td>
+                        <td><span className={getStatusColor(payment.status)}>{payment.status === 'success' ? 'Paid' : humanize(payment.status)}</span></td>
+                        <td className="whitespace-nowrap">{formatDate(payment.paidAt || payment.createdAt)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+};
+
+/* ------------------------------- Add customer ------------------------------- */
+
+const AddCustomerModal = ({ isOpen, onClose, onSaved }) => {
+  const { register, handleSubmit, reset, setError, formState: { errors, isSubmitting } } = useForm();
+
+  useEffect(() => { if (isOpen) reset({ name: '', email: '', phone: '', address: '' }); }, [isOpen, reset]);
+
+  const onSubmit = async (values) => {
     try {
-      const { data } = await customerService.getOne(id);
-      setSelected(data.data);
-    } finally { setDetailLoading(false); }
-  };
-
-  const toggleStatus = async (id) => {
-    try {
-      const { data } = await customerService.toggleStatus(id);
-      toast.success(`Customer ${data.data.is_active ? 'activated' : 'deactivated'}`);
-      load();
-    } catch { toast.error('Failed to update status'); }
+      await customerService.create(values);
+      toast.success('Customer added. They can set a password using "Forgot password".');
+      onSaved();
+      onClose();
+    } catch (error) {
+      if (!applyServerErrors(error, setError)) toast.error(getErrorMessage(error, 'Unable to add the customer'));
+    }
   };
 
   return (
-    <div className="space-y-6">
-      <div className="page-header">
-        <div>
-          <h1 className="text-2xl font-serif font-bold text-gray-900">Customers</h1>
-          <p className="text-gray-500 text-sm mt-1">{pagination.total || 0} registered customers</p>
+    <Modal isOpen={isOpen} onClose={onClose} title="Add customer">
+      <form onSubmit={handleSubmit(onSubmit)} className="space-y-4" noValidate>
+        <Input label="Full name" error={errors.name?.message} {...register('name', rules.name)} />
+        <Input label="Email" type="email" error={errors.email?.message} {...register('email', rules.email)} />
+        <Input label="Phone" type="tel" error={errors.phone?.message} {...register('phone', rules.optionalPhone)} />
+        <Input label="Address (optional)" error={errors.address?.message} {...register('address')} />
+        <div className="flex justify-end gap-3 pt-2">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button type="submit" size="sm" loading={isSubmitting}>Add Customer</Button>
         </div>
+      </form>
+    </Modal>
+  );
+};
+
+/* ----------------------------------- Page ----------------------------------- */
+
+/** Customer management: search, view history and spending, deactivate or delete. */
+const AdminCustomers = () => {
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('');
+  const [page, setPage] = useState(1);
+  const [viewingId, setViewingId] = useState(null);
+  const [adding, setAdding] = useState(false);
+  const [confirming, setConfirming] = useState(null); // { type: 'toggle' | 'delete', customer }
+  const [working, setWorking] = useState(false);
+  const debouncedSearch = useDebounce(search);
+
+  const { data, loading, refetch } = useFetch(
+    () => customerService.getAll(cleanParams({ search: debouncedSearch, status, page, limit: 10 })),
+    [debouncedSearch, status, page]
+  );
+  const customers = data?.data || [];
+
+  useEffect(() => { setPage(1); }, [debouncedSearch, status]);
+
+  const runConfirmed = async () => {
+    const { type, customer } = confirming;
+    setWorking(true);
+    try {
+      const { message } = type === 'delete' ? await customerService.remove(customer.id) : await customerService.toggleStatus(customer.id);
+      toast.success(message);
+      setConfirming(null);
+      refetch();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to update the customer'));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  const isDeactivating = confirming?.type === 'toggle' && confirming.customer.isActive;
+
+  return (
+    <div>
+      <PageHeader title="Customers" subtitle={data ? `${data.pagination.total} customer${data.pagination.total === 1 ? '' : 's'}` : undefined}>
+        <Button size="sm" onClick={() => setAdding(true)}><HiOutlinePlus className="w-4 h-4" /> Add Customer</Button>
+      </PageHeader>
+
+      <div className="card !p-4 mb-4 grid gap-3 sm:grid-cols-[1fr_200px]">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search by name, email or phone..." />
+        <select className="input" value={status} onChange={(event) => setStatus(event.target.value)} aria-label="Filter by status">
+          <option value="">All customers</option>
+          <option value="active">Active</option>
+          <option value="inactive">Deactivated</option>
+        </select>
       </div>
 
-      <div className="card">
-        <div className="relative">
-          <HiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
-          <input className="input pl-10" placeholder="Search by name, email or phone..." value={search}
-            onChange={e => { setSearch(e.target.value); setPage(1); }} />
-        </div>
-      </div>
-
-      {loading ? <TableSkeleton rows={10} cols={6} /> : (
-        <div className="table-container">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Customer</th>
-                <th>Phone</th>
-                <th>Visits</th>
-                <th>Total Spent</th>
-                <th>Joined</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {customers.length === 0 ? (
-                <tr><td colSpan={7} className="text-center py-12 text-gray-400">No customers found</td></tr>
-              ) : customers.map((c, i) => (
-                <motion.tr key={c.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: i * 0.03 }}>
-                  <td>
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full overflow-hidden shrink-0">
-                        {c.avatar ? <img src={c.avatar} alt={c.name} className="w-full h-full object-cover" /> :
-                          <div className="w-full h-full bg-gold-500 flex items-center justify-center text-white text-sm font-bold">{getInitials(c.name)}</div>}
+      {loading ? (
+        <TableSkeleton cols={6} rows={8} />
+      ) : customers.length === 0 ? (
+        <div className="card"><EmptyState icon={HiOutlineUsers} title="No customers found" message="Try a different search term or filter." /></div>
+      ) : (
+        <>
+          <div className="table-container">
+            <table className="table">
+              <thead>
+                <tr><th>Customer</th><th>Phone</th><th>Joined</th><th>Bookings</th><th>Total spent</th><th>Status</th><th className="text-right">Actions</th></tr>
+              </thead>
+              <tbody>
+                {customers.map((customer) => (
+                  <tr key={customer.id}>
+                    <td>
+                      <div className="flex items-center gap-3">
+                        <Avatar src={customer.avatar} name={customer.name} size="sm" />
+                        <div className="min-w-0">
+                          <p className="font-medium text-gray-900 truncate max-w-[180px]">{customer.name}</p>
+                          <p className="text-xs text-gray-500 truncate max-w-[180px]">{customer.email}</p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-medium text-gray-900 text-sm">{c.name}</p>
-                        <p className="text-xs text-gray-400">{c.email}</p>
+                    </td>
+                    <td>{customer.phone || '-'}</td>
+                    <td className="whitespace-nowrap">{formatDate(customer.createdAt)}</td>
+                    <td>{customer.totalBookings}</td>
+                    <td className="font-medium">{formatCurrency(customer.totalSpent)}</td>
+                    <td><span className={customer.isActive ? 'badge-green' : 'badge-red'}>{customer.isActive ? 'Active' : 'Deactivated'}</span></td>
+                    <td>
+                      <div className="flex justify-end gap-0.5">
+                        <button type="button" className="icon-btn" title="View history" aria-label="View history" onClick={() => setViewingId(customer.id)}>
+                          <HiOutlineEye className="w-5 h-5" />
+                        </button>
+                        <button
+                          type="button"
+                          className={`icon-btn ${customer.isActive ? 'text-red-500' : 'text-green-600'}`}
+                          title={customer.isActive ? 'Deactivate' : 'Reactivate'}
+                          aria-label={customer.isActive ? 'Deactivate' : 'Reactivate'}
+                          onClick={() => setConfirming({ type: 'toggle', customer })}
+                        >
+                          {customer.isActive ? <HiOutlineBan className="w-5 h-5" /> : <HiOutlineCheckCircle className="w-5 h-5" />}
+                        </button>
+                        <button type="button" className="icon-btn text-red-500" title="Delete" aria-label="Delete" onClick={() => setConfirming({ type: 'delete', customer })}>
+                          <HiOutlineTrash className="w-5 h-5" />
+                        </button>
                       </div>
-                    </div>
-                  </td>
-                  <td className="text-sm text-gray-600">{c.phone || '—'}</td>
-                  <td className="text-sm text-gray-600">{c.total_visits || 0}</td>
-                  <td className="font-medium text-gold-600 text-sm">{formatCurrency(c.total_spent || 0)}</td>
-                  <td className="text-sm text-gray-500">{formatDate(c.created_at)}</td>
-                  <td><span className={`badge ${c.is_active ? 'badge-green' : 'badge-red'}`}>{c.is_active ? 'Active' : 'Inactive'}</span></td>
-                  <td>
-                    <div className="flex gap-1">
-                      <button onClick={() => viewCustomer(c.id)} className="p-1.5 hover:bg-blue-50 rounded-lg text-blue-600 transition-colors">
-                        <HiEye className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => toggleStatus(c.id)} className={`p-1.5 rounded-lg transition-colors ${c.is_active ? 'hover:bg-red-50 text-red-500' : 'hover:bg-green-50 text-green-600'}`}>
-                        {c.is_active ? <HiBan className="w-4 h-4" /> : <HiCheckCircle className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </td>
-                </motion.tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="p-4"><Pagination {...pagination} onPageChange={setPage} /></div>
-        </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <Pagination pagination={data.pagination} onPageChange={setPage} />
+        </>
       )}
 
-      <Modal isOpen={!!selected} onClose={() => setSelected(null)} title="Customer Details" size="lg">
-        {selected && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-4">
-              <div className="w-16 h-16 rounded-full overflow-hidden">
-                {selected.avatar ? <img src={selected.avatar} alt={selected.name} className="w-full h-full object-cover" /> :
-                  <div className="w-full h-full bg-gold-500 flex items-center justify-center text-white text-2xl font-bold">{getInitials(selected.name)}</div>}
-              </div>
-              <div>
-                <h3 className="font-semibold text-gray-900 text-lg">{selected.name}</h3>
-                <p className="text-gray-500 text-sm">{selected.email}</p>
-                <p className="text-gray-400 text-sm">{selected.phone}</p>
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-3">
-              {[['Total Visits', selected.total_visits || 0], ['Total Spent', formatCurrency(selected.total_spent || 0)], ['Member Since', formatDate(selected.created_at)]].map(([label, value]) => (
-                <div key={label} className="bg-gray-50 rounded-xl p-3 text-center">
-                  <p className="text-xs text-gray-400">{label}</p>
-                  <p className="font-semibold text-gray-900 mt-1">{value}</p>
-                </div>
-              ))}
-            </div>
-            {selected.recent_appointments?.length > 0 && (
-              <div>
-                <h4 className="font-medium text-gray-900 mb-2">Recent Appointments</h4>
-                <div className="space-y-2">
-                  {selected.recent_appointments.slice(0, 5).map(a => (
-                    <div key={a.id} className="flex justify-between items-center p-2 bg-gray-50 rounded-lg text-sm">
-                      <span className="text-gray-700">{a.service_name}</span>
-                      <span className="text-gray-400">{formatDate(a.appointment_date)}</span>
-                      <span className={`badge ${a.status === 'completed' ? 'badge-green' : 'badge-gold'}`}>{a.status}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
+      <CustomerDetail customerId={viewingId} onClose={() => setViewingId(null)} />
+      <AddCustomerModal isOpen={adding} onClose={() => setAdding(false)} onSaved={refetch} />
+      <ConfirmDialog
+        isOpen={Boolean(confirming)}
+        onClose={() => setConfirming(null)}
+        onConfirm={runConfirmed}
+        loading={working}
+        variant={confirming?.type === 'toggle' && !isDeactivating ? 'primary' : 'danger'}
+        title={confirming?.type === 'delete' ? 'Delete this customer?' : isDeactivating ? 'Deactivate this customer?' : 'Reactivate this customer?'}
+        confirmLabel={confirming?.type === 'delete' ? 'Delete' : isDeactivating ? 'Deactivate' : 'Reactivate'}
+        message={
+          confirming?.type === 'delete'
+            ? `${confirming.customer.name}'s account will be permanently removed. Customers with booking history cannot be deleted, only deactivated.`
+            : isDeactivating
+              ? `${confirming?.customer.name} will no longer be able to sign in or book appointments.`
+              : `${confirming?.customer.name} will be able to sign in and book again.`
+        }
+      />
     </div>
   );
 };

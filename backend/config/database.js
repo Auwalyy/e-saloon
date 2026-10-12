@@ -1,30 +1,34 @@
-const { Pool } = require('pg');
+/**
+ * MongoDB connection management.
+ * Supports a real MongoDB (local or Atlas) and, for demos without a database
+ * installed, an in-memory server (USE_MEMORY_DB=true) whose data is lost on restart.
+ */
+const mongoose = require('mongoose');
+const env = require('./env');
 
-const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-  max: 20,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
-});
+mongoose.set('strictQuery', true);
 
-const testConnection = async () => {
-  try {
-    const client = await pool.connect();
-    console.log('✅ PostgreSQL connected successfully');
-    client.release();
-  } catch (err) {
-    console.error('❌ PostgreSQL connection failed:', err.message);
-    process.exit(1);
-  }
+let memoryServer = null;
+
+const resolveUri = async () => {
+  if (!env.useMemoryDb) return env.mongoUri;
+  // Lazy require: this is a dev dependency and is absent in production installs.
+  const { MongoMemoryServer } = require('mongodb-memory-server');
+  memoryServer = await MongoMemoryServer.create();
+  console.log('[db] Using in-memory MongoDB (data is NOT persisted)');
+  return memoryServer.getUri('esalon');
 };
 
-const query = (text, params) => pool.query(text, params);
+const connectDatabase = async () => {
+  const uri = await resolveUri();
+  await mongoose.connect(uri, { serverSelectionTimeoutMS: 10000 });
+  console.log(`[db] MongoDB connected: ${mongoose.connection.host}/${mongoose.connection.name}`);
+  return mongoose.connection;
+};
 
-const getClient = () => pool.connect();
+const disconnectDatabase = async () => {
+  await mongoose.disconnect();
+  if (memoryServer) await memoryServer.stop();
+};
 
-module.exports = { pool, query, getClient, testConnection };
+module.exports = { connectDatabase, disconnectDatabase };

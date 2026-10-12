@@ -1,57 +1,91 @@
-import { motion } from 'framer-motion';
-import { HiCheckCircle } from 'react-icons/hi';
+import { Link } from 'react-router-dom';
+import { HiOutlineEye, HiOutlineHeart, HiOutlineLightBulb } from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import { employeeService, serviceService, reviewService } from '../../services';
+import { useSettings } from '../../context/SettingsContext';
+import PageHero, { SectionHeading } from '../../components/common/PageHero';
+import SmartImage from '../../components/ui/SmartImage';
+import { Reveal } from '../../components/ui/Motion';
 
-const About = () => (
-  <div className="min-h-screen bg-salon-bg">
-    <div className="bg-gradient-to-r from-gray-900 to-gray-800 py-20">
-      <div className="max-w-7xl mx-auto px-4 text-center">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-          <h1 className="text-4xl md:text-5xl font-serif font-bold text-white mb-4">About Aisha's Salon</h1>
-          <p className="text-gray-300 text-lg">Our story, mission, and values</p>
-        </motion.div>
-      </div>
-    </div>
-    <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center mb-16">
-        <motion.div initial={{ opacity: 0, x: -30 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true }}>
-          <h2 className="text-3xl font-serif font-bold text-gray-900 mb-4">Our Story</h2>
-          <p className="text-gray-600 leading-relaxed mb-4">
-            Founded in 2015 by Aisha Bello, Aisha's Salon began as a small beauty studio in Victoria Island, Lagos. With a passion for making every client feel beautiful and confident, Aisha built a team of talented stylists who share her vision.
-          </p>
-          <p className="text-gray-600 leading-relaxed mb-6">
-            Today, we serve hundreds of clients monthly, offering premium hair, beauty, spa, and wellness services in a luxurious, welcoming environment.
-          </p>
-          <ul className="space-y-2">
-            {['500+ Happy Clients', '10+ Years Experience', 'Premium Products Only', 'Certified Professionals'].map(item => (
-              <li key={item} className="flex items-center gap-2 text-gray-700">
-                <HiCheckCircle className="w-5 h-5 text-gold-500 shrink-0" /> {item}
-              </li>
+const STORY_IMAGE = 'https://images.unsplash.com/photo-1559599101-f09722fb4948?auto=format&fit=crop&w=1000&q=70';
+
+const VALUES = [
+  { icon: HiOutlineLightBulb, title: 'Our Mission', text: 'To make every client look and feel their best through skilled, honest and attentive service.' },
+  { icon: HiOutlineEye, title: 'Our Vision', text: 'To be the most trusted salon in the city, where booking is effortless and quality is never in doubt.' },
+  { icon: HiOutlineHeart, title: 'Our Values', text: 'Care for people, pride in our craft, respect for your time and a spotless, welcoming space.' },
+];
+
+/** About page: the salon's story, live numbers and guiding values. */
+const About = () => {
+  const { settings } = useSettings();
+  const stylists = useFetch(() => employeeService.getAll({ limit: 1 }));
+  const services = useFetch(() => serviceService.getAll({ limit: 1 }));
+  const reviews = useFetch(() => reviewService.getAll({ limit: 1 }));
+
+  // Real figures from the system rather than made-up marketing numbers.
+  const stats = [
+    { label: 'Services offered', value: services.data?.pagination?.total },
+    { label: 'Professional stylists', value: stylists.data?.pagination?.total },
+    { label: 'Verified reviews', value: reviews.data?.summary?.count },
+    { label: 'Average rating', value: reviews.data?.summary?.count ? `${reviews.data.summary.average.toFixed(1)} / 5` : undefined },
+  ];
+
+  return (
+    <>
+      <PageHero eyebrow="About us" title={`About ${settings.businessName}`} subtitle={settings.tagline} />
+
+      <section className="section">
+        <div className="container-page grid gap-12 lg:grid-cols-2 items-center">
+          <Reveal>
+            <SmartImage src={STORY_IMAGE} alt="The salon team" className="rounded-3xl shadow-card aspect-[4/3]" />
+          </Reveal>
+          <Reveal delay={0.1}>
+            <p className="eyebrow mb-3">Our story</p>
+            <h2 className="section-title">Beauty, care and convenience under one roof</h2>
+            <p className="text-gray-600 mt-5 leading-relaxed">
+              {settings.about || `${settings.businessName} is a full-service salon offering hair, braiding, skincare, spa, makeup and nail services.`}
+            </p>
+            <p className="text-gray-600 mt-4 leading-relaxed">
+              We built this online platform so you never have to call around or wait in line again. See what is available,
+              choose your stylist, and book the time that works for you. Your appointments, payments and receipts stay in
+              one place.
+            </p>
+            <Link to="/book" className="btn-primary mt-8">Book an Appointment</Link>
+          </Reveal>
+        </div>
+      </section>
+
+      <section className="bg-salon-dark text-white">
+        <div className="container-page py-14 grid grid-cols-2 lg:grid-cols-4 gap-8 text-center">
+          {stats.map(({ label, value }) => (
+            <div key={label}>
+              <p className="text-4xl font-serif font-bold text-gold-400">{value ?? '-'}</p>
+              <p className="mt-2 text-sm text-gray-300">{label}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="container-page">
+          <SectionHeading eyebrow="What guides us" title="Mission, Vision and Values" />
+          <div className="grid gap-6 md:grid-cols-3">
+            {VALUES.map(({ icon: Icon, title, text }, index) => (
+              <Reveal key={title} delay={index * 0.05}>
+                <div className="card h-full text-center">
+                  <div className="w-14 h-14 mx-auto rounded-2xl bg-gold-50 text-gold-600 flex items-center justify-center">
+                    <Icon className="w-7 h-7" />
+                  </div>
+                  <h3 className="mt-5 text-xl font-semibold text-gray-900">{title}</h3>
+                  <p className="mt-3 text-gray-600 leading-relaxed">{text}</p>
+                </div>
+              </Reveal>
             ))}
-          </ul>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, x: 30 }} whileInView={{ opacity: 1, x: 0 }} viewport={{ once: true }}
-          className="h-80 bg-gradient-to-br from-gold-100 to-gold-200 rounded-2xl flex items-center justify-center">
-          <div className="text-center">
-            <div className="text-6xl mb-4">✨</div>
-            <p className="font-serif text-2xl font-bold text-gold-700">Aisha's Salon</p>
-            <p className="text-gold-600">Est. 2015</p>
           </div>
-        </motion.div>
-      </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-        {[
-          { title: 'Our Mission', desc: 'To provide exceptional beauty services that enhance confidence and celebrate individuality.' },
-          { title: 'Our Vision', desc: 'To be the most trusted and loved salon brand in West Africa.' },
-          { title: 'Our Values', desc: 'Excellence, integrity, creativity, and genuine care for every client.' },
-        ].map(({ title, desc }) => (
-          <motion.div key={title} initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }} className="card text-center">
-            <h3 className="font-semibold text-gray-900 mb-2">{title}</h3>
-            <p className="text-gray-500 text-sm">{desc}</p>
-          </motion.div>
-        ))}
-      </div>
-    </div>
-  </div>
-);
+        </div>
+      </section>
+    </>
+  );
+};
 
 export default About;

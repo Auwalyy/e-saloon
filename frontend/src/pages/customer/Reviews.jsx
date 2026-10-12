@@ -1,75 +1,139 @@
-import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { reviewService } from '../../services/index';
-import { formatDate } from '../../utils/helpers';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { HiOutlineChatAlt2 } from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import { reviewService, appointmentService } from '../../services';
+import { useAuth } from '../../context/AuthContext';
+import { cleanParams, formatDate } from '../../utils/helpers';
+import PageHero from '../../components/common/PageHero';
+import ReviewCard from '../../components/common/ReviewCard';
+import ReviewModal from '../../components/common/ReviewModal';
 import StarRating from '../../components/ui/StarRating';
-import { CardSkeleton } from '../../components/ui/Skeleton';
 import Pagination from '../../components/ui/Pagination';
+import EmptyState from '../../components/ui/EmptyState';
+import Button from '../../components/ui/Button';
+import { Skeleton } from '../../components/ui/Skeleton';
+import { Reveal } from '../../components/ui/Motion';
 
+/** Public reviews with a rating breakdown. Signed-in customers can review their completed visits. */
 const Reviews = () => {
-  const [reviews, setReviews] = useState([]);
-  const [pagination, setPagination] = useState({});
-  const [loading, setLoading] = useState(true);
+  const { user, isAdmin } = useAuth();
   const [page, setPage] = useState(1);
+  const [rating, setRating] = useState('');
+  const [reviewing, setReviewing] = useState(null);
 
-  useEffect(() => {
-    setLoading(true);
-    reviewService.getAll({ approved: 'true', page, limit: 12 })
-      .then(({ data }) => { setReviews(data.data || []); setPagination(data.pagination || {}); })
-      .finally(() => setLoading(false));
-  }, [page]);
+  const { data, loading } = useFetch(() => reviewService.getAll(cleanParams({ page, limit: 9, rating })), [page, rating]);
 
-  const avg = reviews.length ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1) : 0;
+  // Completed visits this customer has not reviewed yet.
+  const isCustomer = Boolean(user) && !isAdmin;
+  const visits = useFetch(
+    () => (isCustomer ? appointmentService.getAll({ status: 'completed', limit: 20 }) : Promise.resolve({ data: [] })),
+    [isCustomer]
+  );
+  const awaitingReview = (visits.data?.data || []).filter((appointment) => !appointment.hasReview);
+
+  const summary = data?.summary;
+  const reviews = data?.data || [];
 
   return (
-    <div className="min-h-screen bg-salon-bg">
-      <div className="bg-gradient-to-r from-gray-900 to-gray-800 py-20">
-        <div className="max-w-7xl mx-auto px-4 text-center">
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-            <h1 className="text-4xl md:text-5xl font-serif font-bold text-white mb-4">Client Reviews</h1>
-            <div className="flex items-center justify-center gap-3 mt-4">
-              <span className="text-5xl font-bold text-gold-400">{avg}</span>
-              <div>
-                <StarRating rating={parseFloat(avg)} size="lg" />
-                <p className="text-gray-400 text-sm mt-1">{pagination.total || 0} reviews</p>
-              </div>
-            </div>
-          </motion.div>
-        </div>
-      </div>
+    <>
+      <PageHero eyebrow="Testimonials" title="Customer Reviews" subtitle="Honest feedback from clients after their appointments." />
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {Array(6).fill(0).map((_, i) => <CardSkeleton key={i} />)}
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {reviews.map((review, i) => (
-              <motion.div key={review.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-                className="card hover:shadow-card-hover transition-shadow"
-              >
-                <StarRating rating={review.rating} />
-                <p className="text-gray-600 text-sm mt-3 leading-relaxed">"{review.comment}"</p>
-                {review.service_name && (
-                  <span className="badge badge-gold mt-3">{review.service_name}</span>
-                )}
-                <div className="flex items-center gap-3 mt-4 pt-4 border-t border-gray-100">
-                  <div className="w-9 h-9 bg-gold-500 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0">
-                    {review.customer_name?.[0]}
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{review.customer_name}</p>
-                    <p className="text-xs text-gray-400">{formatDate(review.created_at)}</p>
-                  </div>
+      <section className="container-page py-10">
+        <div className="grid gap-8 lg:grid-cols-[320px_1fr] items-start">
+          {/* Summary and filters */}
+          <aside className="space-y-6 lg:sticky lg:top-24">
+            <div className="card text-center">
+              {summary ? (
+                <>
+                  <p className="text-5xl font-serif font-bold text-gray-900">{summary.average.toFixed(1)}</p>
+                  <div className="flex justify-center mt-2"><StarRating rating={summary.average} size="md" /></div>
+                  <p className="text-sm text-gray-500 mt-1">Based on {summary.count} review{summary.count === 1 ? '' : 's'}</p>
+                  <ul className="mt-5 space-y-1.5">
+                    {summary.distribution.map((row) => {
+                      const percent = summary.count ? Math.round((row.count / summary.count) * 100) : 0;
+                      const isActive = rating === String(row.rating);
+                      return (
+                        <li key={row.rating}>
+                          <button
+                            type="button"
+                            onClick={() => { setRating(isActive ? '' : String(row.rating)); setPage(1); }}
+                            aria-pressed={isActive}
+                            className={`w-full flex items-center gap-2 text-sm px-2 py-1 rounded-lg transition-colors ${isActive ? 'bg-gold-50' : 'hover:bg-gray-50'}`}
+                          >
+                            <span className="w-12 text-left text-gray-600">{row.rating} star</span>
+                            <span className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
+                              <span className="block h-full bg-gold-500 rounded-full" style={{ width: `${percent}%` }} />
+                            </span>
+                            <span className="w-8 text-right text-gray-500">{row.count}</span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  {rating && (
+                    <button type="button" onClick={() => setRating('')} className="text-xs text-gold-700 font-medium mt-3 hover:underline">
+                      Show all ratings
+                    </button>
+                  )}
+                </>
+              ) : (
+                <Skeleton className="h-56" />
+              )}
+            </div>
+
+            <div className="card">
+              <h2 className="font-semibold text-gray-900 font-sans">Share your experience</h2>
+              {!user && (
+                <>
+                  <p className="text-sm text-gray-500 mt-2">Sign in to review a completed appointment.</p>
+                  <Link to="/login" state={{ from: { pathname: '/reviews' } }} className="btn-primary w-full mt-4 !py-2.5 !text-sm">Sign in</Link>
+                </>
+              )}
+              {isCustomer && awaitingReview.length === 0 && (
+                <p className="text-sm text-gray-500 mt-2">
+                  You can leave a review after each completed appointment. <Link to="/book" className="text-gold-700 font-medium hover:underline">Book a visit</Link>
+                </p>
+              )}
+              {isCustomer && awaitingReview.length > 0 && (
+                <ul className="mt-3 space-y-2">
+                  {awaitingReview.slice(0, 4).map((appointment) => (
+                    <li key={appointment.id} className="flex items-center justify-between gap-3 text-sm">
+                      <span className="min-w-0">
+                        <span className="block font-medium text-gray-900 truncate">{appointment.service?.name}</span>
+                        <span className="block text-xs text-gray-500">{formatDate(appointment.date)}</span>
+                      </span>
+                      <Button size="sm" variant="secondary" onClick={() => setReviewing(appointment)}>Review</Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {isAdmin && <p className="text-sm text-gray-500 mt-2">Reviews are moderated from the admin dashboard.</p>}
+            </div>
+          </aside>
+
+          {/* Review list */}
+          <div>
+            {loading ? (
+              <div className="grid gap-6 md:grid-cols-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-52" />)}</div>
+            ) : reviews.length === 0 ? (
+              <EmptyState icon={HiOutlineChatAlt2} title="No reviews to show" message={rating ? 'No reviews with this rating yet.' : 'Be the first to share your experience.'} />
+            ) : (
+              <>
+                <div className="grid gap-6 md:grid-cols-2">
+                  {reviews.map((review, index) => (
+                    <Reveal key={review.id} delay={index * 0.04}><ReviewCard review={review} /></Reveal>
+                  ))}
                 </div>
-              </motion.div>
-            ))}
+                <Pagination pagination={data.pagination} onPageChange={setPage} />
+              </>
+            )}
           </div>
-        )}
-        <Pagination {...pagination} onPageChange={setPage} />
-      </div>
-    </div>
+        </div>
+      </section>
+
+      <ReviewModal appointment={reviewing} onClose={() => setReviewing(null)} onSubmitted={visits.refetch} />
+    </>
   );
 };
 

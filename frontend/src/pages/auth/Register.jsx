@@ -1,78 +1,55 @@
+import { Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { Link, useNavigate } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { HiMail, HiLockClosed, HiUser, HiPhone } from 'react-icons/hi';
-import { useState } from 'react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../../context/AuthContext';
+import { getErrorMessage } from '../../services/api';
+import { rules, applyServerErrors } from '../../utils/validation';
 import Input from '../../components/ui/Input';
+import PasswordInput from '../../components/ui/PasswordInput';
 import Button from '../../components/ui/Button';
 
+/** Customer registration: name, email, phone, password and confirmation. */
 const Register = () => {
-  const { register, handleSubmit, watch, formState: { errors } } = useForm();
-  const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
-  const navigate = useNavigate();
-  const password = watch('password');
+  const { register: createAccount } = useAuth();
+  const { register, handleSubmit, watch, setError, formState: { errors, isSubmitting } } = useForm();
 
-  const onSubmit = async (data) => {
-    setLoading(true);
+  const onSubmit = async (values) => {
     try {
-      const { authService } = await import('../../services/auth.service');
-      await authService.register(data);
-      await login({ email: data.email, password: data.password });
-      toast.success('Account created! Welcome to Aisha\'s Salon 🎉');
-      navigate('/');
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Registration failed');
-    } finally {
-      setLoading(false);
+      await createAccount(values);
+      toast.success('Account created. Welcome!');
+    } catch (error) {
+      if (!applyServerErrors(error, setError)) toast.error(getErrorMessage(error, 'Unable to create your account'));
     }
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gold-50 via-white to-gold-50 flex items-center justify-center p-4">
-      <motion.div initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <Link to="/" className="inline-flex items-center gap-2 mb-6">
-            <div className="w-10 h-10 bg-gold-500 rounded-full flex items-center justify-center">
-              <span className="text-white font-bold">A</span>
-            </div>
-            <span className="font-serif font-bold text-2xl text-gray-900">Aisha's Salon</span>
-          </Link>
-          <h1 className="text-2xl font-bold text-gray-900">Create your account</h1>
-          <p className="text-gray-500 mt-1">Join thousands of happy clients</p>
+    <div>
+      <h1 className="text-3xl font-bold text-gray-900">Create your account</h1>
+      <p className="text-gray-500 mt-2">Book appointments and keep track of every visit.</p>
+
+      <form onSubmit={handleSubmit(onSubmit)} className="mt-8 space-y-4" noValidate>
+        <Input label="Full name" autoComplete="name" placeholder="Aisha Sule" error={errors.name?.message} {...register('name', rules.name)} />
+        <div className="grid sm:grid-cols-2 gap-4">
+          <Input label="Email" type="email" autoComplete="email" placeholder="you@example.com" error={errors.email?.message} {...register('email', rules.email)} />
+          <Input label="Phone" type="tel" autoComplete="tel" placeholder="0803 123 4567" error={errors.phone?.message} {...register('phone', rules.phone)} />
         </div>
+        <PasswordInput autoComplete="new-password" placeholder="At least 8 characters" error={errors.password?.message} {...register('password', rules.password)} />
+        <PasswordInput
+          label="Confirm password"
+          autoComplete="new-password"
+          placeholder="Repeat your password"
+          error={errors.confirmPassword?.message}
+          {...register('confirmPassword', {
+            required: 'Please confirm your password',
+            validate: (value) => value === watch('password') || 'Passwords do not match',
+          })}
+        />
+        <Button type="submit" loading={isSubmitting} className="w-full">Create Account</Button>
+      </form>
 
-        <div className="card">
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <Input label="Full Name" icon={HiUser} placeholder="Amaka Johnson" error={errors.name?.message}
-              {...register('name', { required: 'Name is required', minLength: { value: 2, message: 'Min 2 characters' } })} />
-            <Input label="Email Address" type="email" icon={HiMail} placeholder="you@example.com" error={errors.email?.message}
-              {...register('email', { required: 'Email is required', pattern: { value: /^\S+@\S+\.\S+$/, message: 'Invalid email' } })} />
-            <Input label="Phone Number" icon={HiPhone} placeholder="+234 801 234 5678" error={errors.phone?.message}
-              {...register('phone', { required: 'Phone is required' })} />
-            <Input label="Password" type="password" icon={HiLockClosed} placeholder="Min 8 characters" error={errors.password?.message}
-              {...register('password', {
-                required: 'Password is required',
-                minLength: { value: 8, message: 'Min 8 characters' },
-                pattern: { value: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/, message: 'Must include uppercase, lowercase & number' },
-              })} />
-            <Input label="Confirm Password" type="password" icon={HiLockClosed} placeholder="Repeat password" error={errors.confirmPassword?.message}
-              {...register('confirmPassword', {
-                required: 'Please confirm password',
-                validate: v => v === password || 'Passwords do not match',
-              })} />
-
-            <Button type="submit" loading={loading} className="w-full">Create Account</Button>
-          </form>
-
-          <p className="text-center text-sm text-gray-500 mt-6">
-            Already have an account?{' '}
-            <Link to="/login" className="text-gold-600 font-medium hover:underline">Sign in</Link>
-          </p>
-        </div>
-      </motion.div>
+      <p className="mt-6 text-center text-sm text-gray-600">
+        Already have an account? <Link to="/login" className="text-gold-700 font-semibold hover:underline">Sign in</Link>
+      </p>
     </div>
   );
 };

@@ -1,202 +1,314 @@
-import { useState, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { HiPlus, HiPencil, HiTrash, HiSearch, HiCalendar } from 'react-icons/hi';
-import { useForm } from 'react-hook-form';
+import { useEffect, useState } from 'react';
 import toast from 'react-hot-toast';
-import { employeeService, serviceService } from '../../services/index';
-import { getInitials } from '../../utils/helpers';
-import { CardSkeleton } from '../../components/ui/Skeleton';
-import Modal from '../../components/ui/Modal';
+import { addDays, format, parseISO } from 'date-fns';
+import { HiChevronLeft, HiChevronRight, HiOutlineCalendar, HiOutlinePencil, HiOutlinePlus, HiOutlineTrash, HiOutlineUserGroup } from 'react-icons/hi';
+import useFetch from '../../hooks/useFetch';
+import useDebounce from '../../hooks/useDebounce';
+import { employeeService, serviceService } from '../../services';
+import { getErrorMessage } from '../../services/api';
+import { cleanParams, DAYS, formatTime, getStatusColor, humanize, toDateString } from '../../utils/helpers';
+import PageHeader from '../../components/admin/PageHeader';
+import Avatar from '../../components/ui/Avatar';
 import Button from '../../components/ui/Button';
 import Input from '../../components/ui/Input';
+import Textarea from '../../components/ui/Textarea';
+import ImageUpload from '../../components/ui/ImageUpload';
+import Modal from '../../components/ui/Modal';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
+import SearchInput from '../../components/ui/SearchInput';
 import StarRating from '../../components/ui/StarRating';
+import EmptyState from '../../components/ui/EmptyState';
+import { Skeleton, TableSkeleton } from '../../components/ui/Skeleton';
 
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const defaultHours = () => DAYS.map((_, day) => ({ day, isWorking: day !== 0, start: '09:00', end: '18:00' }));
+const emptyForm = () => ({
+  name: '', email: '', phone: '', specialization: '', experienceYears: 0, bio: '', services: [], workingHours: defaultHours(), isActive: true,
+});
 
-const AdminEmployees = () => {
-  const [employees, setEmployees] = useState([]);
-  const [services, setServices] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState('');
-  const [modalOpen, setModalOpen] = useState(false);
-  const [availModal, setAvailModal] = useState(null);
-  const [editing, setEditing] = useState(null);
-  const [deleteTarget, setDeleteTarget] = useState(null);
+/* ------------------------------- Add / edit form ------------------------------ */
+
+const EmployeeForm = ({ employee, isOpen, onClose, onSaved, services }) => {
+  const [form, setForm] = useState(emptyForm);
+  const [photo, setPhoto] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-  const [availability, setAvailability] = useState([]);
 
-  const { register, handleSubmit, reset, formState: { errors } } = useForm();
+  useEffect(() => {
+    if (!isOpen) return;
+    setPhoto(null);
+    setForm(employee ? {
+      name: employee.name,
+      email: employee.email || '',
+      phone: employee.phone || '',
+      specialization: employee.specialization || '',
+      experienceYears: employee.experienceYears || 0,
+      bio: employee.bio || '',
+      services: employee.services.map((service) => service.id),
+      workingHours: employee.workingHours.map((hours) => ({ ...hours })),
+      isActive: employee.isActive,
+    } : emptyForm());
+  }, [isOpen, employee]);
 
-  const load = () => {
-    setLoading(true);
-    employeeService.getAll({ search }).then(({ data }) => setEmployees(data.data || [])).finally(() => setLoading(false));
-  };
+  const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
+  const updateHours = (day, changes) => update('workingHours', form.workingHours.map((hours) => (hours.day === day ? { ...hours, ...changes } : hours)));
+  const toggleService = (id) => update('services', form.services.includes(id) ? form.services.filter((item) => item !== id) : [...form.services, id]);
 
-  useEffect(() => { load(); }, [search]);
-  useEffect(() => { serviceService.getAll({ limit: 100 }).then(({ data }) => setServices(data.data || [])); }, []);
+  const submit = async (event) => {
+    event.preventDefault();
+    if (form.name.trim().length < 2) return toast.error('Please enter the employee\'s name');
+    const invalidDay = form.workingHours.find((hours) => hours.isWorking && hours.start >= hours.end);
+    if (invalidDay) return toast.error(`${DAYS[invalidDay.day]}: closing time must be after the start time`);
 
-  const openCreate = () => { setEditing(null); reset({}); setModalOpen(true); };
-  const openEdit = (emp) => {
-    setEditing(emp);
-    reset({ name: emp.name, email: emp.email, phone: emp.phone, specialization: emp.specialization, experience_years: emp.experience_years, bio: emp.bio });
-    setModalOpen(true);
-  };
-
-  const openAvail = async (emp) => {
-    const { data } = await employeeService.getOne(emp.id);
-    const avail = data.data?.availability || [];
-    setAvailability(DAYS.map((_, i) => {
-      const found = avail.find(a => a.day_of_week === i);
-      return { day_of_week: i, start_time: found?.start_time?.slice(0, 5) || '09:00', end_time: found?.end_time?.slice(0, 5) || '18:00', is_available: found?.is_available ?? (i !== 0) };
-    }));
-    setAvailModal(emp);
-  };
-
-  const saveAvailability = async () => {
     setSaving(true);
     try {
-      await employeeService.updateAvailability(availModal.id, { availability });
-      toast.success('Availability updated!');
-      setAvailModal(null);
-    } catch { toast.error('Failed to update'); }
-    finally { setSaving(false); }
-  };
-
-  const onSubmit = async (data) => {
-    setSaving(true);
-    try {
-      const fd = new FormData();
-      Object.entries(data).forEach(([k, v]) => { if (v !== undefined && v !== null && k !== 'avatar') fd.append(k, v); });
-      if (data.avatar?.[0]) fd.append('avatar', data.avatar[0]);
-      if (editing) await employeeService.update(editing.id, fd);
-      else await employeeService.create(fd);
-      toast.success(editing ? 'Employee updated!' : 'Employee added!');
-      setModalOpen(false);
-      load();
-    } catch (err) {
-      toast.error(err.response?.data?.message || 'Save failed');
-    } finally { setSaving(false); }
-  };
-
-  const handleDelete = async () => {
-    setDeleting(true);
-    try {
-      await employeeService.delete(deleteTarget.id);
-      toast.success('Employee deactivated');
-      setDeleteTarget(null);
-      load();
-    } catch { toast.error('Delete failed'); }
-    finally { setDeleting(false); }
+      const payload = { ...form, experienceYears: Number(form.experienceYears) || 0 };
+      const { message } = employee ? await employeeService.update(employee.id, payload, photo) : await employeeService.create(payload, photo);
+      toast.success(message);
+      onSaved();
+      onClose();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to save the employee'));
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="space-y-6">
-      <div className="page-header">
-        <div>
-          <h1 className="text-2xl font-serif font-bold text-gray-900">Employees</h1>
-          <p className="text-gray-500 text-sm mt-1">Manage your salon team</p>
+    <Modal isOpen={isOpen} onClose={onClose} title={employee ? 'Edit employee' : 'Add employee'} size="lg">
+      <form onSubmit={submit} className="space-y-5" noValidate>
+        <div className="flex flex-col sm:flex-row gap-5">
+          <ImageUpload label="Photo" shape="round" currentUrl={employee?.photo} onChange={setPhoto} />
+          <div className="flex-1 grid sm:grid-cols-2 gap-4">
+            <Input label="Full name" value={form.name} onChange={(event) => update('name', event.target.value)} required maxLength={100} />
+            <Input label="Specialisation" value={form.specialization} onChange={(event) => update('specialization', event.target.value)} placeholder="e.g. Braiding Specialist" maxLength={150} />
+            <Input label="Email" type="email" value={form.email} onChange={(event) => update('email', event.target.value)} />
+            <Input label="Phone" type="tel" value={form.phone} onChange={(event) => update('phone', event.target.value)} />
+            <Input label="Years of experience" type="number" min={0} max={60} value={form.experienceYears} onChange={(event) => update('experienceYears', event.target.value)} />
+            <div>
+              <label className="label" htmlFor="employee-status">Status</label>
+              <select id="employee-status" className="input" value={String(form.isActive)} onChange={(event) => update('isActive', event.target.value === 'true')}>
+                <option value="true">Active (bookable)</option>
+                <option value="false">Inactive</option>
+              </select>
+            </div>
+          </div>
         </div>
-        <Button onClick={openCreate}><HiPlus className="w-4 h-4" /> Add Employee</Button>
+
+        <Textarea label="Bio" rows={2} maxLength={1000} value={form.bio} onChange={(event) => update('bio', event.target.value)} />
+
+        <fieldset>
+          <legend className="label">Services offered <span className="text-gray-400 font-normal">(leave empty if they perform every service)</span></legend>
+          <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+            {services.map((service) => {
+              const selected = form.services.includes(service.id);
+              return (
+                <button key={service.id} type="button" aria-pressed={selected} onClick={() => toggleService(service.id)} className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${selected ? 'bg-gold-500 border-gold-500 text-salon-dark' : 'border-gray-200 text-gray-600 hover:border-gold-400'}`}>
+                  {service.name}
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend className="label">Working days and hours</legend>
+          <div className="space-y-2">
+            {form.workingHours.map((hours) => (
+              <div key={hours.day} className="flex items-center gap-3 flex-wrap">
+                <label className="flex items-center gap-2 w-32 text-sm font-medium text-gray-700">
+                  <input type="checkbox" checked={hours.isWorking} onChange={(event) => updateHours(hours.day, { isWorking: event.target.checked })} className="w-4 h-4 accent-gold-500" />
+                  {DAYS[hours.day]}
+                </label>
+                {hours.isWorking ? (
+                  <>
+                    <input type="time" step={900} className="input !w-32 !py-2" value={hours.start} onChange={(event) => updateHours(hours.day, { start: event.target.value })} aria-label={`${DAYS[hours.day]} start time`} />
+                    <span className="text-gray-400 text-sm">to</span>
+                    <input type="time" step={900} className="input !w-32 !py-2" value={hours.end} onChange={(event) => updateHours(hours.day, { end: event.target.value })} aria-label={`${DAYS[hours.day]} end time`} />
+                  </>
+                ) : <span className="text-sm text-gray-400">Day off</span>}
+              </div>
+            ))}
+          </div>
+        </fieldset>
+
+        <div className="flex justify-end gap-3 pt-2">
+          <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
+          <Button type="submit" size="sm" loading={saving}>{employee ? 'Save Changes' : 'Add Employee'}</Button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+/* --------------------------------- Schedule --------------------------------- */
+
+const ScheduleModal = ({ employee, onClose }) => {
+  const [from, setFrom] = useState(() => toDateString());
+  const { data, loading } = useFetch(
+    () => (employee ? employeeService.getSchedule(employee.id, { from, to: toDateString(addDays(parseISO(from), 6)) }) : Promise.resolve(null)),
+    [employee?.id, from]
+  );
+
+  useEffect(() => { if (employee) setFrom(toDateString()); }, [employee]);
+
+  const schedule = data?.data;
+  const days = Array.from({ length: 7 }, (_, index) => addDays(parseISO(from), index));
+  const shift = (amount) => setFrom(toDateString(addDays(parseISO(from), amount)));
+
+  return (
+    <Modal isOpen={Boolean(employee)} onClose={onClose} title={employee ? `${employee.name}'s schedule` : ''} size="lg">
+      <div className="flex items-center justify-between mb-4">
+        <button type="button" className="icon-btn" onClick={() => shift(-7)} aria-label="Previous week"><HiChevronLeft className="w-5 h-5" /></button>
+        <p className="font-medium text-gray-900">{format(days[0], 'd MMM')} - {format(days[6], 'd MMM yyyy')}</p>
+        <button type="button" className="icon-btn" onClick={() => shift(7)} aria-label="Next week"><HiChevronRight className="w-5 h-5" /></button>
       </div>
 
-      <div className="card">
-        <div className="relative">
-          <HiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-4 h-4" />
-          <input className="input pl-10" placeholder="Search employees..." value={search} onChange={e => setSearch(e.target.value)} />
-        </div>
+      {loading || !schedule ? (
+        <div className="space-y-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-16" />)}</div>
+      ) : (
+        <ul className="space-y-3">
+          {days.map((day) => {
+            const dateString = toDateString(day);
+            const hours = schedule.employee.workingHours.find((item) => item.day === day.getDay());
+            const appointments = schedule.appointments.filter((appointment) => appointment.date === dateString);
+            return (
+              <li key={dateString} className="border border-gray-100 rounded-xl p-3">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium text-gray-900">{format(day, 'EEEE, d MMM')}</p>
+                  <span className="text-xs text-gray-500">
+                    {hours?.isWorking ? `${formatTime(hours.start)} - ${formatTime(hours.end)}` : 'Day off'}
+                  </span>
+                </div>
+                {appointments.length === 0 ? (
+                  <p className="text-sm text-gray-400 mt-1">{hours?.isWorking ? 'No appointments' : ''}</p>
+                ) : (
+                  <ul className="mt-2 space-y-1.5">
+                    {appointments.map((appointment) => (
+                      <li key={appointment.id} className="flex items-center justify-between gap-3 text-sm bg-salon-bg rounded-lg px-3 py-2">
+                        <span className="font-medium text-gray-900 whitespace-nowrap">{formatTime(appointment.startTime)} - {formatTime(appointment.endTime)}</span>
+                        <span className="flex-1 truncate text-gray-600">{appointment.service?.name} · {appointment.customer?.name}</span>
+                        <span className={getStatusColor(appointment.status)}>{humanize(appointment.status)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Modal>
+  );
+};
+
+/* ----------------------------------- Page ----------------------------------- */
+
+/** Employee management: add, edit, delete, photos, working days and hours, schedules. */
+const AdminEmployees = () => {
+  const [search, setSearch] = useState('');
+  const [editing, setEditing] = useState(undefined); // undefined = closed, null = new, object = edit
+  const [scheduleFor, setScheduleFor] = useState(null);
+  const [deleting, setDeleting] = useState(null);
+  const [working, setWorking] = useState(false);
+  const debouncedSearch = useDebounce(search);
+
+  const { data, loading, refetch } = useFetch(() => employeeService.getAll(cleanParams({ search: debouncedSearch, limit: 100 })), [debouncedSearch]);
+  const services = useFetch(() => serviceService.getAll({ limit: 100, sort: 'name' }));
+  const employees = data?.data || [];
+
+  const confirmDelete = async () => {
+    setWorking(true);
+    try {
+      const { message } = await employeeService.remove(deleting.id);
+      toast.success(message);
+      setDeleting(null);
+      refetch();
+    } catch (error) {
+      toast.error(getErrorMessage(error, 'Unable to delete the employee'));
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div>
+      <PageHeader title="Employees" subtitle="Your stylists, their services and working hours.">
+        <Button size="sm" onClick={() => setEditing(null)}><HiOutlinePlus className="w-4 h-4" /> Add Employee</Button>
+      </PageHeader>
+
+      <div className="card !p-4 mb-4">
+        <SearchInput value={search} onChange={setSearch} placeholder="Search by name, specialisation, email or phone..." className="max-w-md" />
       </div>
 
       {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {Array(4).fill(0).map((_, i) => <CardSkeleton key={i} />)}
+        <TableSkeleton cols={6} />
+      ) : employees.length === 0 ? (
+        <div className="card">
+          <EmptyState icon={HiOutlineUserGroup} title="No employees found" action={<Button size="sm" onClick={() => setEditing(null)}>Add your first employee</Button>} />
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-          {employees.map((emp, i) => (
-            <motion.div key={emp.id} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.05 }}
-              className="card hover:shadow-card-hover transition-shadow text-center"
-            >
-              <div className="w-16 h-16 rounded-full overflow-hidden mx-auto mb-3 ring-4 ring-gold-100">
-                {emp.avatar ? <img src={emp.avatar} alt={emp.name} className="w-full h-full object-cover" /> :
-                  <div className="w-full h-full bg-gold-500 flex items-center justify-center text-white font-bold text-xl">{getInitials(emp.name)}</div>}
-              </div>
-              <h3 className="font-semibold text-gray-900">{emp.name}</h3>
-              <p className="text-gold-600 text-xs mt-1">{emp.specialization}</p>
-              <p className="text-gray-400 text-xs">{emp.experience_years} yrs exp</p>
-              <div className="flex justify-center mt-1">
-                <StarRating rating={parseFloat(emp.avg_rating)} size="sm" />
-              </div>
-              <div className="flex gap-2 mt-4 justify-center">
-                <button onClick={() => openEdit(emp)} className="p-2 hover:bg-blue-50 rounded-lg text-blue-600 transition-colors" title="Edit">
-                  <HiPencil className="w-4 h-4" />
-                </button>
-                <button onClick={() => openAvail(emp)} className="p-2 hover:bg-gold-50 rounded-lg text-gold-600 transition-colors" title="Availability">
-                  <HiCalendar className="w-4 h-4" />
-                </button>
-                <button onClick={() => setDeleteTarget(emp)} className="p-2 hover:bg-red-50 rounded-lg text-red-500 transition-colors" title="Delete">
-                  <HiTrash className="w-4 h-4" />
-                </button>
-              </div>
-            </motion.div>
-          ))}
+        <div className="table-container">
+          <table className="table">
+            <thead>
+              <tr><th>Employee</th><th>Contact</th><th>Experience</th><th>Working days</th><th>Rating</th><th>Status</th><th className="text-right">Actions</th></tr>
+            </thead>
+            <tbody>
+              {employees.map((employee) => (
+                <tr key={employee.id}>
+                  <td>
+                    <div className="flex items-center gap-3">
+                      <Avatar src={employee.photo} name={employee.name} />
+                      <div>
+                        <p className="font-medium text-gray-900">{employee.name}</p>
+                        <p className="text-xs text-gold-700">{employee.specialization || 'Stylist'}</p>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <p>{employee.phone || '-'}</p>
+                    <p className="text-xs text-gray-500">{employee.email}</p>
+                  </td>
+                  <td>{employee.experienceYears} yr{employee.experienceYears === 1 ? '' : 's'}</td>
+                  <td>
+                    <div className="flex gap-0.5">
+                      {employee.workingHours.map((hours) => (
+                        <span key={hours.day} title={hours.isWorking ? `${DAYS[hours.day]}: ${formatTime(hours.start)} - ${formatTime(hours.end)}` : `${DAYS[hours.day]}: off`} className={`w-6 h-6 rounded text-[10px] font-semibold flex items-center justify-center ${hours.isWorking ? 'bg-gold-100 text-gold-800' : 'bg-gray-100 text-gray-300'}`}>
+                          {DAYS[hours.day][0]}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td>
+                    <div className="flex items-center gap-1.5">
+                      <StarRating rating={employee.rating.average} />
+                      <span className="text-xs text-gray-500">({employee.rating.count})</span>
+                    </div>
+                  </td>
+                  <td><span className={employee.isActive ? 'badge-green' : 'badge-gray'}>{employee.isActive ? 'Active' : 'Inactive'}</span></td>
+                  <td>
+                    <div className="flex justify-end gap-0.5">
+                      <button type="button" className="icon-btn text-blue-600" title="View schedule" aria-label="View schedule" onClick={() => setScheduleFor(employee)}><HiOutlineCalendar className="w-5 h-5" /></button>
+                      <button type="button" className="icon-btn" title="Edit" aria-label="Edit" onClick={() => setEditing(employee)}><HiOutlinePencil className="w-5 h-5" /></button>
+                      <button type="button" className="icon-btn text-red-500" title="Delete" aria-label="Delete" onClick={() => setDeleting(employee)}><HiOutlineTrash className="w-5 h-5" /></button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
-      {/* Create/Edit Modal */}
-      <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit Employee' : 'Add Employee'} size="lg">
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <Input label="Full Name" error={errors.name?.message} {...register('name', { required: 'Required' })} />
-            <Input label="Email" type="email" error={errors.email?.message} {...register('email', { required: 'Required' })} />
-            <Input label="Phone" error={errors.phone?.message} {...register('phone', { required: 'Required' })} />
-            <Input label="Specialization" error={errors.specialization?.message} {...register('specialization', { required: 'Required' })} />
-            <Input label="Experience (years)" type="number" {...register('experience_years')} />
-            {!editing && <Input label="Password" type="password" placeholder="Default: Employee@123" {...register('password')} />}
-            <div className="col-span-2">
-              <label className="label">Profile Photo</label>
-              <input type="file" accept="image/*" className="input py-2" {...register('avatar')} />
-            </div>
-          </div>
-          <div>
-            <label className="label">Bio</label>
-            <textarea className="input resize-none" rows={3} {...register('bio')} />
-          </div>
-          <div className="flex gap-3 justify-end pt-2">
-            <Button variant="outline" type="button" onClick={() => setModalOpen(false)}>Cancel</Button>
-            <Button type="submit" loading={saving}>{editing ? 'Update' : 'Add'} Employee</Button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Availability Modal */}
-      <Modal isOpen={!!availModal} onClose={() => setAvailModal(null)} title={`${availModal?.name} — Availability`} size="lg">
-        <div className="space-y-3">
-          {availability.map((slot, i) => (
-            <div key={i} className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl">
-              <input type="checkbox" checked={slot.is_available}
-                onChange={e => setAvailability(prev => prev.map((s, j) => j === i ? { ...s, is_available: e.target.checked } : s))}
-                className="rounded border-gray-300 text-gold-500" />
-              <span className="w-10 text-sm font-medium text-gray-700">{DAYS[i]}</span>
-              <input type="time" value={slot.start_time} disabled={!slot.is_available}
-                onChange={e => setAvailability(prev => prev.map((s, j) => j === i ? { ...s, start_time: e.target.value } : s))}
-                className="input py-1.5 text-sm w-32 disabled:opacity-50" />
-              <span className="text-gray-400 text-sm">to</span>
-              <input type="time" value={slot.end_time} disabled={!slot.is_available}
-                onChange={e => setAvailability(prev => prev.map((s, j) => j === i ? { ...s, end_time: e.target.value } : s))}
-                className="input py-1.5 text-sm w-32 disabled:opacity-50" />
-            </div>
-          ))}
-          <div className="flex gap-3 justify-end pt-2">
-            <Button variant="outline" onClick={() => setAvailModal(null)}>Cancel</Button>
-            <Button onClick={saveAvailability} loading={saving}>Save Availability</Button>
-          </div>
-        </div>
-      </Modal>
-
-      <ConfirmDialog isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDelete}
-        loading={deleting} title="Deactivate Employee" message={`Deactivate ${deleteTarget?.name}?`} />
+      <EmployeeForm isOpen={editing !== undefined} employee={editing || null} onClose={() => setEditing(undefined)} onSaved={refetch} services={services.data?.data || []} />
+      <ScheduleModal employee={scheduleFor} onClose={() => setScheduleFor(null)} />
+      <ConfirmDialog
+        isOpen={Boolean(deleting)}
+        onClose={() => setDeleting(null)}
+        onConfirm={confirmDelete}
+        loading={working}
+        title="Delete this employee?"
+        confirmLabel="Delete"
+        message={`${deleting?.name} will be removed. Employees with past appointments are deactivated instead, so history is preserved.`}
+      />
     </div>
   );
 };

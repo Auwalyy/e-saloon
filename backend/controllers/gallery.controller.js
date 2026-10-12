@@ -1,38 +1,40 @@
-const { query } = require('../config/database');
+/**
+ * Gallery: public image grid (by category) and admin management.
+ */
+const { GalleryItem } = require('../models');
+const AppError = require('../utils/AppError');
+const { asyncHandler, paginate, pick } = require('../utils/helpers');
+const mediaService = require('../services/media.service');
 
-exports.getGallery = async (req, res) => {
-  try {
-    const { category } = req.query;
-    let conditions = [];
-    let params = [];
-    if (category && category !== 'all') { conditions.push(`category = $1`); params.push(category); }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const result = await query(`SELECT * FROM gallery ${where} ORDER BY created_at DESC`, params);
-    res.json({ success: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+exports.getGallery = asyncHandler(async (req, res) => {
+  const { category, page, limit = 24 } = req.query;
+  const isAdmin = req.user && req.user.role === 'admin';
+  const filter = isAdmin ? {} : { isActive: true };
+  if (category && GalleryItem.CATEGORIES.includes(category)) filter.category = category;
 
-exports.addGalleryImage = async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ success: false, message: 'Image required' });
-    const { title, category, is_featured } = req.body;
-    const result = await query(
-      'INSERT INTO gallery (title, image_url, category, is_featured) VALUES ($1,$2,$3,$4) RETURNING *',
-      [title, req.file.path, category || 'other', is_featured === 'true']
-    );
-    res.status(201).json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+  const { items, pagination } = await paginate(GalleryItem, filter, { page, limit });
+  res.json({ success: true, data: items, pagination, categories: GalleryItem.CATEGORIES });
+});
 
-exports.deleteGalleryImage = async (req, res) => {
-  try {
-    await query('DELETE FROM gallery WHERE id = $1', [req.params.id]);
-    res.json({ success: true, message: 'Image deleted' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+exports.createGalleryItem = asyncHandler(async (req, res) => {
+  const image = (await mediaService.saveImage(req.file, req.user.id)) || req.body.imageUrl;
+  if (!image) throw AppError.badRequest('Please choose an image to upload');
+  const item = await GalleryItem.create({ ...pick(req.body, ['title', 'category', 'isActive']), image });
+  res.status(201).json({ success: true, message: 'Image added to gallery', data: item });
+});
+
+exports.updateGalleryItem = asyncHandler(async (req, res) => {
+  const item = await GalleryItem.findById(req.params.id);
+  if (!item) throw AppError.notFound('Gallery image');
+  item.set(pick(req.body, ['title', 'category', 'isActive']));
+  if (req.file) item.image = await mediaService.replaceImage(req.file, item.image, req.user.id);
+  await item.save();
+  res.json({ success: true, message: 'Gallery image updated', data: item });
+});
+
+exports.deleteGalleryItem = asyncHandler(async (req, res) => {
+  const item = await GalleryItem.findById(req.params.id);
+  if (!item) throw AppError.notFound('Gallery image');
+  await Promise.all([mediaService.removeImage(item.image), item.deleteOne()]);
+  res.json({ success: true, message: 'Gallery image deleted' });
+});

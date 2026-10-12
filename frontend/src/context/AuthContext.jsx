@@ -1,61 +1,92 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { authService } from '../services/auth.service';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { authService } from '../services';
+import { SESSION_EXPIRED_EVENT } from '../services/api';
 
+/**
+ * Holds the signed-in user and exposes login / register / logout.
+ * The session survives page reloads through localStorage and is re-validated
+ * against the API on startup.
+ */
 const AuthContext = createContext(null);
 
+const readStoredUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem('user'));
+  } catch {
+    return null;
+  }
+};
+
+const storeSession = ({ token, csrfToken, user }) => {
+  if (token) localStorage.setItem('token', token);
+  if (csrfToken) localStorage.setItem('csrfToken', csrfToken);
+  localStorage.setItem('user', JSON.stringify(user));
+};
+
+const clearSession = () => ['token', 'csrfToken', 'user'].forEach((key) => localStorage.removeItem(key));
+
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(() => {
-    try { return JSON.parse(localStorage.getItem('user')); } catch { return null; }
-  });
+  const [user, setUser] = useState(readStoredUser);
   const [loading, setLoading] = useState(true);
 
-  const fetchUser = useCallback(async () => {
-    const token = localStorage.getItem('token');
-    if (!token) { setLoading(false); return; }
-    try {
-      const { data } = await authService.getMe();
-      setUser(data.user);
-      localStorage.setItem('user', JSON.stringify(data.user));
-    } catch {
-      localStorage.removeItem('token');
-      localStorage.removeItem('user');
-      setUser(null);
-    } finally {
+  // Confirm the stored session is still valid.
+  useEffect(() => {
+    if (!localStorage.getItem('token')) {
       setLoading(false);
+      return;
     }
+    authService.getMe()
+      .then((body) => {
+        storeSession(body);
+        setUser(body.user);
+      })
+      .catch(() => {
+        clearSession();
+        setUser(null);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  useEffect(() => { fetchUser(); }, [fetchUser]);
+  // The API client fires this when any request comes back 401.
+  useEffect(() => {
+    const onExpired = () => {
+      clearSession();
+      setUser(null);
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+  }, []);
 
-  const login = async (credentials) => {
-    const { data } = await authService.login(credentials);
-    localStorage.setItem('token', data.token);
-    localStorage.setItem('user', JSON.stringify(data.user));
-    setUser(data.user);
-    return data;
-  };
+  const startSession = useCallback((body) => {
+    storeSession(body);
+    setUser(body.user);
+    return body.user;
+  }, []);
 
-  const logout = async () => {
+  const login = useCallback(async (credentials) => startSession(await authService.login(credentials)), [startSession]);
+  const register = useCallback(async (data) => startSession(await authService.register(data)), [startSession]);
+
+  const logout = useCallback(async () => {
     await authService.logout().catch(() => {});
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
+    clearSession();
     setUser(null);
-  };
+  }, []);
 
-  const updateUser = (updatedUser) => {
-    setUser(updatedUser);
-    localStorage.setItem('user', JSON.stringify(updatedUser));
-  };
+  const updateUser = useCallback((updated) => {
+    localStorage.setItem('user', JSON.stringify(updated));
+    setUser(updated);
+  }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, loading, login, logout, updateUser, fetchUser }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({ user, loading, isAdmin: user?.role === 'admin', login, register, logout, updateUser, startSession }),
+    [user, loading, login, register, logout, updateUser, startSession]
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 };
 
 export const useAuth = () => {
-  const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error('useAuth must be used within AuthProvider');
-  return ctx;
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth must be used within AuthProvider');
+  return context;
 };
