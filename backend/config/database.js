@@ -4,8 +4,39 @@
  * lost on restart. The in-memory server is used when USE_MEMORY_DB=true, and
  * automatically in development when no database is configured or installed.
  */
+const dns = require('dns');
 const mongoose = require('mongoose');
 const env = require('./env');
+
+const PUBLIC_DNS = ['8.8.8.8', '1.1.1.1'];
+const DEFAULT_DB_NAME = 'esalon';
+
+/** Options for a configured database. Names the database when the URI does not (Atlas URIs often omit it). */
+const connectOptions = () => {
+  const options = { serverSelectionTimeoutMS: env.mongoUriProvided ? 10000 : 3000 };
+  const path = env.mongoUri.replace(/^mongodb(\+srv)?:\/\/[^/]+/, '').split('?')[0];
+  if (path.length <= 1) options.dbName = DEFAULT_DB_NAME;
+  return options;
+};
+
+/**
+ * Connects to the configured database. "mongodb+srv://" addresses need an SRV
+ * DNS lookup, which some routers and phone hotspots cannot answer. When that
+ * lookup fails, retry once using public DNS servers.
+ */
+const connectConfigured = async () => {
+  try {
+    await mongoose.connect(env.mongoUri, connectOptions());
+  } catch (error) {
+    const isSrvLookupFailure = env.mongoUri.startsWith('mongodb+srv://') && /querySrv|queryTxt/.test(error.message);
+    if (!isSrvLookupFailure) throw error;
+    await mongoose.disconnect().catch(() => {});
+    console.warn(`[db] Your network's DNS could not look up the database address (${error.code || 'SRV lookup failed'}).`);
+    console.warn(`[db] Retrying with public DNS servers (${PUBLIC_DNS.join(', ')})...`);
+    dns.setServers(PUBLIC_DNS);
+    await mongoose.connect(env.mongoUri, connectOptions());
+  }
+};
 
 mongoose.set('strictQuery', true);
 
@@ -24,8 +55,7 @@ const connectDatabase = async () => {
     await mongoose.connect(await startMemoryServer());
   } else {
     try {
-      // Fail fast when probing the default local address, so the fallback below is quick.
-      await mongoose.connect(env.mongoUri, { serverSelectionTimeoutMS: env.mongoUriProvided ? 10000 : 3000 });
+      await connectConfigured();
     } catch (error) {
       // A configured database that cannot be reached is always an error. Only the
       // "nothing configured, nothing installed" development case falls back.

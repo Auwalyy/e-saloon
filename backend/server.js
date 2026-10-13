@@ -53,7 +53,24 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('unhandledRejection', (reason) => console.error('[server] unhandled rejection:', reason));
 
+/** Turns common database start-up failures into advice the developer can act on. */
+const explainStartupError = (error) => {
+  const message = error.message || '';
+  if (/querySrv|queryTxt|ENOTFOUND|EAI_AGAIN/.test(message)) {
+    return 'Could not look up the database address. Check your internet connection and the cluster name in MONGODB_URI.';
+  }
+  if (/whitelist|IP that isn't|Could not connect to any servers/i.test(message)) {
+    return 'MongoDB Atlas refused the connection. In Atlas open Network Access and allow your current IP address (or 0.0.0.0/0).';
+  }
+  if (/bad auth|Authentication failed/i.test(message)) {
+    return 'The database username or password in MONGODB_URI is wrong. Special characters in the password must be URL-encoded.';
+  }
+  return null;
+};
+
 start().catch((error) => {
   console.error('[server] failed to start:', error.message);
+  const advice = explainStartupError(error);
+  if (advice) console.error(`[server] ${advice}`);
   process.exit(1);
 });
