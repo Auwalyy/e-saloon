@@ -7,7 +7,7 @@ services:
     name: e-salon-api
     runtime: node
     rootDir: backend
-    buildCommand: npm install
+    buildCommand: npm ci
     startCommand: npm start
     healthCheckPath: /api/health
     envVars:
@@ -33,7 +33,7 @@ services:
     name: e-salon
     runtime: static
     rootDir: frontend
-    buildCommand: npm install && npm run build
+    buildCommand: npm ci && npm run build
     staticPublishPath: dist
     routes:
       # Single-page app: every path is served by index.html.

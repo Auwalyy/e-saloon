@@ -193,7 +193,7 @@ Render can host both the API and the website. Use MongoDB Atlas for the database
 |---|---|
 | Root Directory | `backend` |
 | Runtime | Node |
-| Build Command | `npm install` |
+| Build Command | `npm ci` |
 | Start Command | `npm start` |
 | Health Check Path | `/api/health` |
 
@@ -204,7 +204,7 @@ Environment variables: `NODE_ENV=production`, `MONGODB_URI`, `JWT_SECRET` (32 or
 | Setting | Value |
 |---|---|
 | Root Directory | `frontend` |
-| Build Command | `npm install && npm run build` |
+| Build Command | `npm ci && npm run build` |
 | Publish Directory | `dist` |
 
 Environment variable: `VITE_API_URL` = the API URL plus `/api`, for example `https://e-salon-api.onrender.com/api`.
