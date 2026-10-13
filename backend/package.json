@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "build": "node -e \"console.log('Backend has no build step: nothing to compile.')\"",
     "dev": "nodemon server.js",
     "dev:memory": "node scripts/dev-memory.js",
     "migrate": "node database/migrate.js",
