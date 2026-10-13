@@ -37,7 +37,7 @@ const assertCustomerCanModify = async (appointment) => {
   const deadline = appointment.startAt.getTime() - cancellationWindowHours * 60 * 60 * 1000;
   if (Date.now() > deadline) {
     throw AppError.badRequest(
-      `Appointments can only be changed up to ${cancellationWindowHours} hour(s) before the start time. Please call the salon.`
+      `Appointments can only be changed up to ${cancellationWindowHours} hour(s) before the start time. Please contact the salon.`
     );
   }
 };

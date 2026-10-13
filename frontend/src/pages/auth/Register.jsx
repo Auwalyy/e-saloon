@@ -31,7 +31,7 @@ const Register = () => {
         <Input label="Full name" autoComplete="name" placeholder="Aisha Sule" error={errors.name?.message} {...register('name', rules.name)} />
         <div className="grid sm:grid-cols-2 gap-4">
           <Input label="Email" type="email" autoComplete="email" placeholder="you@example.com" error={errors.email?.message} {...register('email', rules.email)} />
-          <Input label="Phone" type="tel" autoComplete="tel" placeholder="0803 123 4567" error={errors.phone?.message} {...register('phone', rules.phone)} />
+          <Input label="Phone" type="tel" autoComplete="tel" placeholder="080X XXX XXXX" error={errors.phone?.message} {...register('phone', rules.phone)} />
         </div>
         <PasswordInput autoComplete="new-password" placeholder="At least 8 characters" error={errors.password?.message} {...register('password', rules.password)} />
         <PasswordInput

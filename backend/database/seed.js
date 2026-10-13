@@ -152,15 +152,15 @@ const seedDatabase = async ({ fresh = false, log = true } = {}) => {
     businessName: "Aisha's Salon",
     tagline: 'Where beauty meets luxury',
     about: "Aisha's Salon is a full-service beauty destination offering hair, braiding, skincare, spa, makeup and nail services delivered by experienced professionals in a calm, luxurious space.",
-    address: '14 Admiralty Way, Lekki Phase 1, Lagos, Nigeria',
+    address: 'Bayero University, Kano, Nigeria',
     email: 'hello@aishasalon.com',
-    phone: '+234 803 123 4567',
+    phone: '',
     socialLinks: {
       facebook: 'https://facebook.com/aishasalon',
       instagram: 'https://instagram.com/aishasalon',
       twitter: 'https://x.com/aishasalon',
       tiktok: 'https://tiktok.com/@aishasalon',
-      whatsapp: 'https://wa.me/2348031234567',
+      whatsapp: '',
     },
   }, { upsert: true, setDefaultsOnInsert: true });
   const settings = await Setting.getMain();
@@ -170,7 +170,7 @@ const seedDatabase = async ({ fresh = false, log = true } = {}) => {
   let admin = await User.findOne({ role: 'admin' });
   if (!admin) {
     admin = await User.create({
-      name: env.admin.name, email: env.admin.email, password: env.admin.password, role: 'admin', phone: '+234 803 123 4567',
+      name: env.admin.name, email: env.admin.email, password: env.admin.password, role: 'admin', phone: '',
     });
   }
 

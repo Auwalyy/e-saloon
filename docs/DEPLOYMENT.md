@@ -180,3 +180,41 @@ The integration follows Paystack's documented flow but has only been checked wit
 - **Secrets:** never commit `.env`. Rotate `JWT_SECRET` if it is ever exposed; this signs everyone out.
 - **Updates:** pushing to the main branch redeploys both Railway and Vercel. Run `npm run migrate` against the live database after a release that changes indexes.
 - **Scaling:** the API keeps no session state in memory, so it can run as several instances (rate-limit counters are then per instance). Reminders are claimed atomically, so each is still sent only once.
+
+---
+
+## Alternative: deploying on Render
+
+Render can host both the API and the website. Use MongoDB Atlas for the database as in step 1 above.
+
+### API (Web Service)
+
+| Setting | Value |
+|---|---|
+| Root Directory | `backend` |
+| Runtime | Node |
+| Build Command | `npm install` |
+| Start Command | `npm start` |
+| Health Check Path | `/api/health` |
+
+Environment variables: `NODE_ENV=production`, `MONGODB_URI`, `JWT_SECRET` (32 or more random characters), `FRONTEND_URL` (the website URL, no trailing slash), `ADMIN_EMAIL`, `ADMIN_PASSWORD`, and optionally the `EMAIL_*` and `PAYSTACK_*` values. Do not set `PORT`; Render provides it.
+
+### Website (Static Site)
+
+| Setting | Value |
+|---|---|
+| Root Directory | `frontend` |
+| Build Command | `npm install && npm run build` |
+| Publish Directory | `dist` |
+
+Environment variable: `VITE_API_URL` = the API URL plus `/api`, for example `https://e-salon-api.onrender.com/api`.
+
+Under **Redirects/Rewrites** add a rewrite from `/*` to `/index.html`, so refreshing a page such as `/services` works.
+
+### One step with the blueprint
+
+The repository includes `render.yaml`, which defines both services. In Render choose **New > Blueprint**, select the repository, and enter the values it asks for. Deploy the API first, then set `VITE_API_URL` on the website and `FRONTEND_URL` on the API to each other's addresses and redeploy both.
+
+### Free plan note
+
+Render's free web services go to sleep after a period without traffic. The first visit afterwards takes up to a minute while the API wakes, and appointment reminder emails are only sent while it is awake. Use a paid instance for a live salon.

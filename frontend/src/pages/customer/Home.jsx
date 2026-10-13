@@ -40,7 +40,7 @@ const buildFaqs = (settings) => [
   },
   {
     question: 'Can I cancel or reschedule my appointment?',
-    answer: `Yes. Open "My Bookings" and choose Reschedule or Cancel up to ${settings.cancellationWindowHours} hour(s) before your appointment. After that, please call us.`,
+    answer: `Yes. Open "My Bookings" and choose Reschedule or Cancel up to ${settings.cancellationWindowHours} hour(s) before your appointment. After that, please contact us.`,
   },
   {
     question: 'How do I pay?',
@@ -52,7 +52,7 @@ const buildFaqs = (settings) => [
   },
   {
     question: 'What if I am running late?',
-    answer: 'Please call us as soon as you can. We hold appointments for 15 minutes; after that we may need to shorten or reschedule the service.',
+    answer: 'Please let us know through the Contact page as soon as you can. We hold appointments for 15 minutes; after that we may need to shorten or reschedule the service.',
   },
 ];
 
