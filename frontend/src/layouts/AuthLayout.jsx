@@ -3,6 +3,7 @@ import { HiOutlineCalendar, HiOutlineClock, HiOutlineReceiptTax } from 'react-ic
 import { useSettings } from '../context/SettingsContext';
 import { PageTransition } from '../components/ui/Motion';
 import Logo from '../components/common/Logo';
+import ApiStatusBanner from '../components/common/ApiStatusBanner';
 
 const PERKS = [
   { icon: HiOutlineCalendar, text: 'Book any service in under a minute' },
@@ -41,8 +42,10 @@ const AuthLayout = () => {
         <p className="relative text-sm text-white/60">&copy; {new Date().getFullYear()} {settings.businessName}</p>
       </aside>
 
-      <main className="flex flex-col items-center justify-center p-6 sm:p-10 bg-white">
-        <div className="w-full max-w-md">
+      <main className="flex flex-col bg-white">
+        <ApiStatusBanner />
+        <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-10">
+          <div className="w-full max-w-md">
           <div className="lg:hidden mb-8"><Logo /></div>
           <PageTransition key={pathname}>
             <Outlet />
@@ -50,6 +53,7 @@ const AuthLayout = () => {
           <p className="mt-8 text-center text-sm text-gray-500">
             <Link to="/" className="hover:text-gold-700">&larr; Back to website</Link>
           </p>
+          </div>
         </div>
       </main>
     </div>

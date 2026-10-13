@@ -6,12 +6,13 @@ import { serviceService } from '../../services';
 import { formatCurrency, formatDuration } from '../../utils/helpers';
 import PageHero from '../../components/common/PageHero';
 import EmptyState from '../../components/ui/EmptyState';
+import Button from '../../components/ui/Button';
 import { Skeleton } from '../../components/ui/Skeleton';
 import { Reveal } from '../../components/ui/Motion';
 
 /** Price list: every service grouped by category, cheapest first. */
 const Pricing = () => {
-  const { data, loading } = useFetch(() => serviceService.getAll({ limit: 100, sort: 'price_asc' }));
+  const { data, loading, error, refetch } = useFetch(() => serviceService.getAll({ limit: 100, sort: 'price_asc' }));
 
   const groups = useMemo(() => {
     const byCategory = new Map();
@@ -31,7 +32,12 @@ const Pricing = () => {
         {loading && (
           <div className="grid gap-6 lg:grid-cols-2">{[0, 1, 2, 3].map((i) => <Skeleton key={i} className="h-64" />)}</div>
         )}
-        {!loading && groups.length === 0 && <EmptyState icon={HiOutlineTag} title="Prices will be published soon" />}
+        {!loading && error && (
+          <EmptyState icon={HiOutlineTag} title="We could not load the price list" message={error} action={<Button onClick={refetch}>Try again</Button>} />
+        )}
+        {!loading && !error && groups.length === 0 && (
+          <EmptyState icon={HiOutlineTag} title="No services have been added yet" message="Prices appear here as soon as the salon adds its services." />
+        )}
 
         <div className="grid gap-6 lg:grid-cols-2 items-start">
           {groups.map(([category, services], index) => (

@@ -121,23 +121,29 @@ The backend follows the **MVC pattern** with a service layer: routes → validat
 
 ### Quick start (no database to install)
 
-This runs the API against an in-memory MongoDB that is loaded with demo data on every start. It is the fastest way to see the system working. **Data is lost when the server stops.**
+From the project root:
 
 ```bash
-# Terminal 1: API on http://localhost:5000
-cd backend
-npm install
-npm run dev:memory
-
-# Terminal 2: website on http://localhost:5173
-cd frontend
-npm install
-npm run dev
+npm run setup     # installs the backend and frontend packages (first time only)
+npm run dev       # starts the API (http://localhost:5050) and the website (http://localhost:5173)
 ```
 
 Open <http://localhost:5173> and sign in with one of the [demo accounts](#demo-accounts).
 
+When no MongoDB is configured or running, the API automatically starts on a temporary in-memory database loaded with demo data, so everything works straight away. **That data is lost when the server stops.** Follow the normal setup below to keep your data.
+
 > The first run downloads a MongoDB binary (about 80 MB), so it can take a few minutes.
+
+You can also run the two parts in separate terminals with `npm run dev` inside `backend/` and inside `frontend/`.
+
+### If the website shows "We cannot reach the server"
+
+The website is running but the API is not answering. Check that:
+
+1. The backend is started (`npm run dev` in `backend/`, or `npm run dev` from the root) and its terminal shows `API listening on http://localhost:5050`.
+2. No other program is using the API's port. The backend prints a clear message if the port is taken. To use a different port, set `PORT` in `backend/.env` and `VITE_PROXY_TARGET` in `frontend/.env` to match, then restart both.
+
+The page reconnects by itself once the API is up.
 
 ### Normal setup (persistent database)
 
@@ -148,7 +154,7 @@ npm install
 cp .env.example .env          # then edit .env (see below)
 npm run migrate               # create collections, indexes and the admin account
 npm run seed                  # optional: load demo data
-npm run dev                   # API on http://localhost:5000
+npm run dev                   # API on http://localhost:5050
 
 # 2. Frontend (second terminal)
 cd frontend
@@ -168,9 +174,10 @@ On Windows PowerShell use `Copy-Item .env.example .env` instead of `cp`.
 | Variable | Required | Description |
 |---|---|---|
 | `NODE_ENV` | No | `development` or `production` |
-| `PORT` | No | API port (default `5000`) |
+| `PORT` | No | API port (default `5050`) |
 | `MONGODB_URI` | Yes in production | MongoDB connection string |
-| `USE_MEMORY_DB` | No | `true` runs on an in-memory database with demo data |
+| `USE_MEMORY_DB` | No | `true` always runs on a temporary in-memory database with demo data |
+| `AUTO_SEED` | No | In development, an empty database is filled with demo data on start. Set `false` to start empty |
 | `JWT_SECRET` | Yes in production | Random string of at least 32 characters used to sign tokens |
 | `JWT_EXPIRES_IN` | No | Token lifetime (default `7d`) |
 | `JWT_COOKIE_EXPIRES` | No | Cookie lifetime in days (default `7`) |
@@ -191,7 +198,7 @@ node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
 
 | Variable | Description |
 |---|---|
-| `VITE_API_URL` | API base URL. Keep `/api` in development (Vite proxies it to port 5000). In production set it to the deployed API, for example `https://your-api.up.railway.app/api` |
+| `VITE_API_URL` | API base URL. Keep `/api` in development (Vite proxies it to the backend on port 5050). In production set it to the deployed API, for example `https://your-api.up.railway.app/api` |
 
 ---
 

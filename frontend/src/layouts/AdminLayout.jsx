@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import Sidebar from '../components/admin/Sidebar';
 import AdminHeader from '../components/admin/AdminHeader';
+import ApiStatusBanner from '../components/common/ApiStatusBanner';
 import { PageTransition } from '../components/ui/Motion';
 
 /** Shell for the admin dashboard: fixed sidebar, top bar and scrolling content. */
@@ -14,6 +15,7 @@ const AdminLayout = () => {
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       <div className="flex-1 flex flex-col min-w-0">
         <AdminHeader onMenuClick={() => setSidebarOpen(true)} />
+        <ApiStatusBanner />
         <main className="flex-1 overflow-y-auto p-4 sm:p-6">
           <PageTransition key={pathname} className="max-w-7xl mx-auto">
             <Outlet />

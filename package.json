@@ -1,0 +1,12 @@
+{
+  "name": "e-salon",
+  "private": true,
+  "version": "1.0.0",
+  "description": "E-Salon Platform for Online Booking and Business Management (Aisha's Salon)",
+  "scripts": {
+    "setup": "npm install --prefix backend && npm install --prefix frontend",
+    "dev": "node scripts/dev.js",
+    "seed": "npm run seed --prefix backend",
+    "build": "npm run build --prefix frontend"
+  }
+}

@@ -43,7 +43,9 @@ export const mediaUrl = (path) => {
 /** Human readable message for any failed request. */
 export const getErrorMessage = (error, fallback = 'Something went wrong. Please try again.') => {
   if (error?.response?.data instanceof Blob) return fallback;
-  if (error?.response?.data?.message) return error.response.data.message;
+  if (typeof error?.response?.data?.message === 'string') return error.response.data.message;
+  // A reply without our message format means something other than the salon API answered.
+  if (error?.response && (error.response.status === 404 || error.response.status >= 500)) return 'The salon server is not responding. Please try again shortly.';
   if (error?.code === 'ERR_NETWORK') return 'Cannot reach the server. Please check your connection.';
   if (error?.code === 'ECONNABORTED') return 'The request took too long. Please try again.';
   return fallback;

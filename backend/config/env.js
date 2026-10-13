@@ -11,10 +11,14 @@ const bool = (value, fallback = false) =>
 const env = {
   nodeEnv: process.env.NODE_ENV || 'development',
   isProduction: process.env.NODE_ENV === 'production',
-  port: Number(process.env.PORT) || 5000,
+  // 5050 by default: port 5000 is commonly taken by other local projects and tools.
+  port: Number(process.env.PORT) || 5050,
 
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/esalon',
+  mongoUriProvided: Boolean(process.env.MONGODB_URI),
   useMemoryDb: bool(process.env.USE_MEMORY_DB),
+  // In development an empty database is filled with demo data on start (set AUTO_SEED=false to disable).
+  autoSeed: bool(process.env.AUTO_SEED, true),
 
   jwtSecret: process.env.JWT_SECRET || 'dev-only-secret-change-me',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '7d',

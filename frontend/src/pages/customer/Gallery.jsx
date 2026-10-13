@@ -8,6 +8,7 @@ import { cleanParams } from '../../utils/helpers';
 import PageHero from '../../components/common/PageHero';
 import SmartImage from '../../components/ui/SmartImage';
 import EmptyState from '../../components/ui/EmptyState';
+import Button from '../../components/ui/Button';
 import { Skeleton } from '../../components/ui/Skeleton';
 
 const CATEGORIES = ['Hair', 'Braids', 'Facials', 'Spa', 'Makeup', 'Pedicure'];
@@ -16,7 +17,7 @@ const CATEGORIES = ['Hair', 'Braids', 'Facials', 'Spa', 'Makeup', 'Pedicure'];
 const Gallery = () => {
   const [category, setCategory] = useState('');
   const [activeIndex, setActiveIndex] = useState(-1);
-  const { data, loading } = useFetch(() => galleryService.getAll(cleanParams({ category, limit: 60 })), [category]);
+  const { data, loading, error, refetch } = useFetch(() => galleryService.getAll(cleanParams({ category, limit: 60 })), [category]);
 
   const items = data?.data || [];
   const active = items[activeIndex];
@@ -57,8 +58,10 @@ const Gallery = () => {
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {Array.from({ length: 8 }, (_, index) => <Skeleton key={index} className="aspect-square" />)}
           </div>
+        ) : error ? (
+          <EmptyState icon={HiOutlinePhotograph} title="We could not load the gallery" message={error} action={<Button onClick={refetch}>Try again</Button>} />
         ) : items.length === 0 ? (
-          <EmptyState icon={HiOutlinePhotograph} title="No photos in this category yet" message="Please check back soon." />
+          <EmptyState icon={HiOutlinePhotograph} title={category ? `No ${category} photos yet` : 'No photos yet'} message="Please check back soon." />
         ) : (
           <motion.div layout className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             <AnimatePresence mode="popLayout">

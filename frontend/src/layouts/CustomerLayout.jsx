@@ -3,6 +3,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import Navbar from '../components/common/Navbar';
 import Footer from '../components/common/Footer';
+import ApiStatusBanner from '../components/common/ApiStatusBanner';
 import { PageTransition } from '../components/ui/Motion';
 
 /** Shell for the public website: navbar, animated page area and footer. */
@@ -16,6 +17,7 @@ const CustomerLayout = () => {
     <div className="min-h-screen flex flex-col">
       <Navbar />
       <main className="flex-1 pt-16">
+        <ApiStatusBanner />
         <AnimatePresence mode="wait" initial={false}>
           <PageTransition key={pathname}>
             <Outlet />

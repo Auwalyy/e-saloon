@@ -8,6 +8,7 @@ import PageHero from '../../components/common/PageHero';
 import StylistCard from '../../components/common/StylistCard';
 import SearchInput from '../../components/ui/SearchInput';
 import EmptyState from '../../components/ui/EmptyState';
+import Button from '../../components/ui/Button';
 import { CardGridSkeleton } from '../../components/ui/Skeleton';
 import { Reveal } from '../../components/ui/Motion';
 
@@ -15,7 +16,7 @@ import { Reveal } from '../../components/ui/Motion';
 const Stylists = () => {
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebounce(search);
-  const { data, loading } = useFetch(
+  const { data, loading, error, refetch } = useFetch(
     () => employeeService.getAll(cleanParams({ search: debouncedSearch, limit: 50 })),
     [debouncedSearch]
   );
@@ -30,6 +31,8 @@ const Stylists = () => {
 
         {loading ? (
           <CardGridSkeleton count={6} />
+        ) : error ? (
+          <EmptyState icon={HiOutlineUserGroup} title="We could not load our stylists" message={error} action={<Button onClick={refetch}>Try again</Button>} />
         ) : stylists.length === 0 ? (
           <EmptyState icon={HiOutlineUserGroup} title="No stylists found" message="Try a different search term." />
         ) : (

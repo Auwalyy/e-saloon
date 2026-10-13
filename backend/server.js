@@ -20,10 +20,23 @@ const start = async () => {
     console.log(`[db] Demo data loaded. Admin login: ${env.admin.email} / ${env.admin.password}`);
   } else {
     await ensureAdminUser();
+    // A brand-new development database gets the demo catalogue so the site is not empty.
+    if (!env.isProduction && env.autoSeed && (await seedDatabase({ log: false }))) {
+      console.log('[db] Empty database detected: demo data loaded (set AUTO_SEED=false to disable).');
+    }
   }
 
   server = app.listen(env.port, () => {
-    console.log(`[server] API listening on port ${env.port} (${env.nodeEnv})`);
+    console.log(`[server] API listening on http://localhost:${env.port} (${env.nodeEnv})`);
+  });
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`[server] Port ${env.port} is already used by another program.`);
+      console.error('[server] Stop that program, or set PORT in backend/.env and VITE_PROXY_TARGET in frontend/.env to another port.');
+    } else {
+      console.error('[server] failed to start:', error.message);
+    }
+    process.exit(1);
   });
   startReminderScheduler();
 };
